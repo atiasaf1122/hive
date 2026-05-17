@@ -1,0 +1,137 @@
+"""SQLite connection management and schema for HIVE.
+
+Single file DB at ~/.hive/hive.db. All tables created on first connect.
+Migrations are append-only: new tables/columns added, nothing dropped.
+"""
+from __future__ import annotations
+
+import os
+import sqlite3
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+import aiosqlite
+
+HIVE_DIR = Path(os.environ.get("HIVE_DIR", Path.home() / ".hive"))
+DB_PATH = HIVE_DIR / "hive.db"
+
+_SCHEMA = """
+PRAGMA journal_mode=WAL;
+PRAGMA foreign_keys=ON;
+
+CREATE TABLE IF NOT EXISTS sessions (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL DEFAULT '',
+    path        TEXT NOT NULL DEFAULT '',
+    type        TEXT NOT NULL DEFAULT 'one-shot',   -- 'one-shot' | 'persistent'
+    status      TEXT NOT NULL DEFAULT 'active',     -- 'active' | 'completed' | 'failed' | 'archived'
+    approval_mode TEXT NOT NULL DEFAULT 'full-auto',
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    last_active TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS agents (
+    id              TEXT PRIMARY KEY,
+    session_id      TEXT NOT NULL REFERENCES sessions(id),
+    role            TEXT NOT NULL DEFAULT 'worker',
+    model           TEXT NOT NULL DEFAULT '',
+    status          TEXT NOT NULL DEFAULT 'active',  -- 'active' | 'completed' | 'failed' | 'crashed'
+    worktree_path   TEXT NOT NULL DEFAULT '',
+    pid             INTEGER,
+    started_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    ended_at        TEXT
+);
+
+CREATE TABLE IF NOT EXISTS events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          REAL NOT NULL,
+    session_id  TEXT NOT NULL REFERENCES sessions(id),
+    agent_id    TEXT NOT NULL,
+    type        TEXT NOT NULL,
+    payload_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS cost_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          TEXT NOT NULL DEFAULT (datetime('now')),
+    session_id  TEXT NOT NULL REFERENCES sessions(id),
+    agent_id    TEXT NOT NULL,
+    input_tokens  INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd    REAL NOT NULL DEFAULT 0.0
+);
+
+CREATE TABLE IF NOT EXISTS skills (
+    id           TEXT PRIMARY KEY,
+    name         TEXT NOT NULL,
+    description  TEXT NOT NULL,
+    tags         TEXT NOT NULL DEFAULT '[]',
+    path         TEXT NOT NULL DEFAULT '',
+    instructions TEXT NOT NULL DEFAULT '',
+    embedding    BLOB,
+    version      INTEGER NOT NULL DEFAULT 1,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+
+CREATE TABLE IF NOT EXISTS pipelines (
+    id           TEXT PRIMARY KEY,
+    name         TEXT NOT NULL,
+    task         TEXT NOT NULL,
+    model        TEXT NOT NULL DEFAULT 'claude:sonnet',
+    approval_mode TEXT NOT NULL DEFAULT 'full-auto',
+    schedule     TEXT,
+    webhook_token TEXT,
+    enabled      INTEGER NOT NULL DEFAULT 1,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    last_run_at  TEXT,
+    next_run_at  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS pipeline_runs (
+    id           TEXT PRIMARY KEY,
+    pipeline_id  TEXT NOT NULL REFERENCES pipelines(id),
+    session_id   TEXT,
+    triggered_by TEXT NOT NULL DEFAULT 'manual',
+    status       TEXT NOT NULL DEFAULT 'running',
+    started_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    ended_at     TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_runs_pl ON pipeline_runs(pipeline_id);
+CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
+CREATE INDEX IF NOT EXISTS idx_events_agent   ON events(agent_id);
+CREATE INDEX IF NOT EXISTS idx_agents_session ON agents(session_id);
+"""
+
+
+def ensure_hive_dir() -> Path:
+    HIVE_DIR.mkdir(parents=True, exist_ok=True)
+    return HIVE_DIR
+
+
+async def init_db(path: Path = DB_PATH) -> None:
+    """Create DB file and apply schema. Safe to call multiple times."""
+    ensure_hive_dir()
+    async with aiosqlite.connect(path) as conn:
+        await conn.executescript(_SCHEMA)
+        await conn.commit()
+
+
+@asynccontextmanager
+async def get_conn(path: Path = DB_PATH):
+    """Async context manager yielding an aiosqlite connection."""
+    async with aiosqlite.connect(path) as conn:
+        conn.row_factory = aiosqlite.Row
+        await conn.execute("PRAGMA journal_mode=WAL")
+        await conn.execute("PRAGMA foreign_keys=ON")
+        yield conn
+
+
+def init_db_sync(path: Path = DB_PATH) -> None:
+    """Synchronous init used by CLI startup before async loop."""
+    ensure_hive_dir()
+    conn = sqlite3.connect(path)
+    conn.executescript(_SCHEMA)
+    conn.commit()
+    conn.close()
