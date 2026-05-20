@@ -19,6 +19,7 @@ from backend.api.safety_http import router as safety_router
 from backend.api.security_http import router as security_router
 from backend.api.registries_http import router as registries_router
 from backend.api.skills_search_http import router as skills_search_router
+from backend.api.summarizer_http import router as summarizer_router
 from backend.api.usage_http import router as usage_router
 from backend.api.validation_http import router as validation_router
 from backend.api.ws import router as ws_router
@@ -93,6 +94,7 @@ app.include_router(safety_router)
 app.include_router(validation_router)
 app.include_router(install_router)
 app.include_router(skills_search_router)
+app.include_router(summarizer_router)
 
 
 @app.get("/health")

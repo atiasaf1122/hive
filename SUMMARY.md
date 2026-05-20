@@ -1,3 +1,80 @@
+# HIVE — Phase 10, pass 4: v1.0-rc1 — Haiku live wiring + Summarizer agent + repo docs + CI
+
+**Date:** 2026-05-20
+**Status:** ✅ 599 backend tests (was 577 → **+22 new**), frontend vite build clean (384 KB JS / 37 KB CSS). Items 2, 3, 8 of the v1.0 "Still open" list now land. Only item 6 (Windows .msi build — hardware-bound) remains before tagging v1.0.0-rc1.
+
+## Scope of this pass
+
+Continuing from pass 3, this pass closes the three items that don't need a Windows machine to bundle the desktop installer:
+
+- ✅ **Item 2** — Haiku live wiring through a session-scoped `HaikuCaller` for cross-check + skills rerank
+- ✅ **Item 3** — Tiered reporting + Summarizer agent
+- ✅ **Item 8** — README rewrite + CONTRIBUTING + CODE_OF_CONDUCT + SECURITY + GitHub Actions CI
+
+Only **Item 6 (Windows .msi)** is left for the user — that's the genuine hardware dependency.
+
+## ✅ Item 2 — Haiku live wiring
+
+New module `backend/llm/haiku.py`:
+
+- `HaikuCaller` — session-scoped, callable, one-shot wrapper around `ClaudeCLIWorker`. Each call spawns `--model claude-haiku-4-5 --max-turns 1`, collects `TEXT_DELTA` events into the final response, records the `COST` event into the existing `cost_log` table (so the /api/cost dashboard surfaces Haiku spend without any new wiring), and tracks per-session token spend.
+- `HaikuBudgetExhausted` — raised when the cumulative token usage exceeds the session's budget (default 50 000; per-feature budgets via env vars: 20 000 cross-check / 10 000 rerank / 30 000 summarizer).
+- Response cap (`max_response_len=8 000` chars) with mid-stream `worker.kill()` — protects against runaway responses.
+- `build_caller(session_id, budget_tokens, …)` — production helper that defaults to `ClaudeCLIWorker`; tests inject a `_MinimalWorker` stub.
+
+Wired in:
+
+- `backend/api/skills_search_http.py` — `GET /api/skills/search/hybrid?session_id=…` now constructs a HaikuCaller and passes it to `maybe_rerank`. Budget exhaustion → `RerankResult(used_llm=False, skipped_reason="budget_exhausted")` (graceful fallback to the hybrid ranking).
+- `backend/api/validation_http.py` — new `POST /api/validation/cross-check` route. Body carries `session_id`, the `CompletionReport`, git changes, audit rows, and installed packages. Runs every deterministic validator + (optionally) the Haiku semantic cross-check.
+
+`semantic_cross_check` and `maybe_rerank` keep their existing `haiku_caller=None` contracts — when no caller is supplied they short-circuit with a `skipped_reason`, so the orchestrator continues to work in dev without an OAuth token.
+
+## ✅ Item 3 — Tiered reporting + Summarizer agent
+
+New package `backend/summarizer/`:
+
+- `summarize_events(events, haiku_caller, task_description)` — accepts the raw `HiveEvent` stream (or replayed dicts), renders a compact chronological transcript (text deltas + tool uses + tool results + errors, with a `max_transcript_chars` head/tail trim), then calls Haiku for a single structured JSON response.
+- `summarize_transcript(transcript, haiku_caller, task_description)` — same prompt path for pre-rendered transcripts (multi-agent rollups, replays).
+- `TieredSummary` carries three views derived from one Haiku call: `tldr` (one sentence for chat bubble), `standard` (4-sentence paragraph), `detailed` (a full `CompletionReport` ready for the validator stack).
+- Robust response parsing: strips ```json fences, finds the JSON object inside surrounding prose, normalises bad `status` values to `"done"`, drops malformed evidence rows, never crashes on unexpected fields.
+
+HTTP wiring: `backend/api/summarizer_http.py` — `POST /api/summarizer/run`. The request can carry `verify=true` along with optional `git_changes` / `audit_rows` / `installed_packages_after`; when set, the detailed report runs through `validate_report_async` immediately after the Haiku call, returning a `verification` block alongside the three tiers. This is the "verification-before-VRAM-release" gate from the v1.0 plan — the orchestrator can use it to decide whether to release a worker's worktree or spawn a remediation turn.
+
+## ✅ Item 8 — Docs + CI
+
+- **README.md** rewritten: refreshed test counts, mentions the Tauri desktop shell as the primary UI, documents the safety stack (command policy + hard stops + validation), lists the new env vars (`HIVE_HAIKU_*_BUDGET_TOKENS`), and points at the new docs.
+- **CONTRIBUTING.md** — dev environment, test commands, code style, architectural invariants, commit-message format, issue-filing rules, how to extend HIVE with skills/plugins/pipelines.
+- **CODE_OF_CONDUCT.md** — Contributor Covenant 2.1.
+- **SECURITY.md** — coordinated-disclosure policy, threat model (malicious LLM commands, exfiltration, persistence, supply chain), explicit out-of-scope list.
+- **`.github/workflows/ci.yml`** — three jobs:
+  - `backend` — uv install + `pytest tests/ -q`
+  - `frontend` — npm ci + `tsc -b --force` + `vite build`
+  - `desktop-rust` — `cargo check --locked` on the Tauri shell (PR-conditional + push-on-main)
+
+## Verification
+
+```
+hive$     pytest tests/ -q                ✓ 599 passed in 57s
+desktop$  vite build                       ✓ 384 KB JS / 37 KB CSS, gzipped 111 KB / 7.27 KB
+```
+
+**Test coverage delta this pass:** +22 new tests, 0 regressions.
+
+- `tests/unit/test_haiku_caller.py` — 11 tests: text-delta concatenation, spend tracking, cost-event optional, AGENT_ERROR escalation, budget exhaustion, response cap kill, remaining-tokens accounting, integration with `semantic_cross_check` + `maybe_rerank`, plus HTTP-level tests for `POST /api/validation/cross-check` (with and without `run_semantic_check`).
+- `tests/unit/test_summarizer.py` — 11 tests: three-tier extraction, markdown-fence stripping, JSON-in-prose detection, error paths (empty / unparseable), bad-status normalisation, malformed-evidence drop, event-stream rendering (text + tool + result + error), transcript trimming, HTTP wiring (verify=true happy path + empty-transcript 400).
+
+The Rust shell wasn't re-`cargo check`-ed in WSL (cargo isn't installed there). The CI workflow above runs that check on every PR.
+
+## Still open for v1.0
+
+The user committed to handling item 6 themselves:
+
+1. **Section 4 — Packaging on Windows** (was item 6). Run the `packaging/BUILD.md` runbook on a Windows machine to produce a signed `.msi` and verify first-run setup on a clean VM. Estimate: half a day, mostly waiting on builds.
+
+2. **`v1.0.0-rc1` tag + GitHub Release draft** (was item 9). Once item 6 succeeds we tag and ship. The remaining LLM-integration work (cross-check, rerank, summariser) is now live and budget-protected; we can validate it against a real Haiku in an alpha pass after the .msi exists.
+
+---
+
 # HIVE — Phase 10, pass 3: v1.0-rc1 — safety overrides, hybrid skills search, streaming hardening, multi-window
 
 **Date:** 2026-05-20
