@@ -165,15 +165,49 @@ def launch_session(
 
 # ── REST endpoints ───────────────────────────────────────────────────────────
 
+def _resolve_workspace_path(raw: str | None, session_id: str) -> str:
+    """Validate user-supplied workspace path, fall back to a session-local dir.
+
+    The orchestrator's worktree pipeline assumes the path exists and is a
+    directory. Without these checks, an empty / non-existent / file path
+    surfaces as an opaque FileNotFoundError from inside uvloop when we
+    later `cd` into it to run `git init`. We catch that here and return a
+    clear 400 instead.
+    """
+    if raw is None or not raw.strip():
+        # Treat empty as "use the session-local default" — backwards-
+        # compatible with the old behaviour for callers that pass "".
+        # (Pure missing field also lands here via the None branch.)
+        if raw is None:
+            workspace = Path.home() / ".hive" / "sessions" / session_id
+            workspace.mkdir(parents=True, exist_ok=True)
+            return str(workspace)
+        # An explicitly-empty string is almost always a UI bug (the chip
+        # was never populated) — refuse it loudly rather than silently
+        # falling back, because the user thinks they chose a folder.
+        raise HTTPException(
+            status_code=400,
+            detail="project_path is empty — choose a workspace folder.",
+        )
+
+    expanded = Path(raw).expanduser()
+    if not expanded.exists():
+        raise HTTPException(
+            status_code=400,
+            detail=f"project_path does not exist: {expanded}",
+        )
+    if not expanded.is_dir():
+        raise HTTPException(
+            status_code=400,
+            detail=f"project_path is not a directory: {expanded}",
+        )
+    return str(expanded)
+
+
 @router.post("/sessions", response_model=CreateSessionResponse)
 async def create_session_endpoint(req: CreateSessionRequest) -> CreateSessionResponse:
     session_id = uuid.uuid4().hex[:8]
-    if req.project_path:
-        project_path = req.project_path
-    else:
-        workspace = Path.home() / ".hive" / "sessions" / session_id
-        workspace.mkdir(parents=True, exist_ok=True)
-        project_path = str(workspace)
+    project_path = _resolve_workspace_path(req.project_path, session_id)
 
     await db_create_session(session_id, name=req.task[:80], approval_mode=req.approval_mode)
 

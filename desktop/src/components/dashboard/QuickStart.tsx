@@ -121,6 +121,13 @@ export function QuickStart({ initialTask = '' }: QuickStartProps) {
 
   async function attemptStart() {
     if (!task.trim() || submitting) return
+    // Workspace is required — the backend now refuses an empty path
+    // with HTTP 400, so we mirror that check at the client to avoid
+    // a confusing round-trip when the user hits Ctrl+Enter.
+    if (!workspace.trim()) {
+      setError('Choose a workspace folder.')
+      return
+    }
     setSubmitting(true)
     setError(null)
     try {
@@ -214,8 +221,15 @@ export function QuickStart({ initialTask = '' }: QuickStartProps) {
             <span className="text-[11px] text-ink-faint">Ctrl + Enter</span>
             <button
               type="button"
-              disabled={!task.trim() || submitting}
+              disabled={!task.trim() || !workspace.trim() || submitting}
               onClick={() => void attemptStart()}
+              title={
+                !workspace.trim()
+                  ? 'Select a workspace folder first'
+                  : !task.trim()
+                    ? 'Describe a task'
+                    : 'Start the project'
+              }
               className="btn-primary inline-flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <span>{submitting ? 'Checking…' : 'Start'}</span>
@@ -281,19 +295,31 @@ function WorkspaceChip({
     return () => document.removeEventListener('mousedown', onDoc)
   }, [])
 
-  const display = value || '(pick a folder)'
-  const short = display.length > 26 ? '…' + display.slice(-25) : display
+  const isEmpty = !value.trim()
+  // "Required" red label vs. the actual folder path. Empty state pulls
+  // attention; the chip stays clickable so the user can still pick.
+  const display = isEmpty ? 'Required — pick a folder' : value
+  const short =
+    display.length > 26 && !isEmpty ? '…' + display.slice(-25) : display
 
   return (
     <div ref={ref} className="relative">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex items-center gap-2 text-xs text-ink-muted bg-surface-2 hover:bg-surface border border-line rounded-full pl-2.5 pr-2 py-1 transition-colors"
-        title={value || 'Pick a workspace'}
+        className={clsx(
+          'inline-flex items-center gap-2 text-xs rounded-full pl-2.5 pr-2 py-1 transition-colors',
+          isEmpty
+            ? 'text-red-500 bg-red-500/10 border border-red-500/40 hover:bg-red-500/15'
+            : 'text-ink-muted bg-surface-2 hover:bg-surface border border-line',
+        )}
+        title={isEmpty ? 'Workspace is required — pick a folder' : value}
+        data-workspace-required={isEmpty || undefined}
       >
         <IconFolder size={14} strokeWidth={1.75} />
-        <span className="text-ink truncate max-w-[180px]">{short}</span>
+        <span className={clsx('truncate max-w-[200px]', isEmpty ? 'text-red-500 font-medium' : 'text-ink')}>
+          {short}
+        </span>
         <IconChevronDown size={12} className="opacity-60" />
       </button>
 

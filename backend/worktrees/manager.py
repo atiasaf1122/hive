@@ -30,7 +30,11 @@ class WorktreeManager:
 
     def __init__(self, session_id: str, project_path: str) -> None:
         self.session_id = session_id
-        self.project_path = Path(project_path).resolve()
+        # Preserve the raw input so ensure_git_repo() can detect empty
+        # strings — `Path("").resolve()` silently becomes the current
+        # working directory, which would otherwise hide the bug.
+        self._raw_project_path = project_path
+        self.project_path = Path(project_path).resolve() if project_path else Path("")
         self.session_root = WORKTREES_ROOT / session_id
 
     def worktree_path(self, agent_id: str) -> Path:
@@ -44,7 +48,20 @@ class WorktreeManager:
         ``user.name`` / ``user.email`` causes the commit to fail with
         "Author identity unknown" and the entire orchestration silently
         stalls — that was the snake-game bug in Phase 9C testing.
+
+        Defensive guard: a missing or non-existent ``project_path`` here
+        means an API caller bypassed the workspace validation in
+        ``backend.api.http._resolve_workspace_path``. Without this raise,
+        ``git init`` surfaces as an opaque ``FileNotFoundError`` from
+        deep in uvloop's subprocess plumbing — confusing both users and
+        log scrapers. Raise a clear ValueError instead.
         """
+        raw = (self._raw_project_path or "").strip()
+        if not raw or not self.project_path.exists():
+            raise ValueError(
+                f"Project path missing or does not exist: {self._raw_project_path!r}"
+            )
+
         git_dir = self.project_path / ".git"
         if not git_dir.exists():
             logger.info("Initializing git repo in %s", self.project_path)
