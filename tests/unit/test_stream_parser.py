@@ -43,7 +43,10 @@ async def test_system_init_yields_agent_start():
 
 
 @pytest.mark.asyncio
-async def test_assistant_text_yields_text_delta():
+async def test_assistant_text_yields_text_done():
+    """Consolidated `assistant` messages come AFTER the partial stream_event
+    deltas, so the parser emits them as TEXT_DONE (canonical final text).
+    Accumulating both as TEXT_DELTA used to double-paragraph the chat."""
     payload = {
         "type": "assistant",
         "message": {"content": [{"type": "text", "text": "hello"}]},
@@ -51,7 +54,7 @@ async def test_assistant_text_yields_text_delta():
     reader = _stream_of(payload)
     events = await _collect(reader, _make_config())
     assert len(events) == 1
-    assert events[0].type == EventType.TEXT_DELTA
+    assert events[0].type == EventType.TEXT_DONE
     assert events[0].text == "hello"
 
 
@@ -92,7 +95,7 @@ async def test_assistant_mixed_content_yields_multiple_events():
     reader = _stream_of(payload)
     events = await _collect(reader, _make_config())
     assert len(events) == 2
-    assert events[0].type == EventType.TEXT_DELTA
+    assert events[0].type == EventType.TEXT_DONE
     assert events[1].type == EventType.TOOL_USE
 
 

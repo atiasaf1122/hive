@@ -39,7 +39,7 @@ async def test_orchestrator_node_appends_user_message_to_history() -> None:
         composition=TeamComposition(team=[], confidence=0.9, rationale="chat"),
     )
 
-    async def fake_orchestrate(message, session_id, history, model="claude:sonnet"):
+    async def fake_orchestrate(message, session_id, history, model="claude:sonnet", project_path=None):
         return decision
 
     with patch("backend.orchestrator.graph.orchestrate", fake_orchestrate):

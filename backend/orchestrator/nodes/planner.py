@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 
 from backend.workers.base import EventType, WorkerConfig
 from backend.workers.claude_cli import ClaudeCLIWorker
@@ -104,23 +105,45 @@ async def orchestrate(
     session_id: str,
     history: list[dict] | None = None,
     model: str = PLANNER_MODEL,
+    project_path: str | None = None,
 ) -> OrchestratorDecision:
-    """Run one orchestrator turn — answer the user, optionally with a team to spawn."""
+    """Run one orchestrator turn — answer the user, optionally with a team to spawn.
+
+    `project_path` is currently NOT used as the planner's cwd. Reason:
+    a planner spawned at the workspace cwd is a `claude --dangerously-
+    skip-permissions` process with write access to the project. In
+    testing it ignored the JSON-only instruction and just *built the
+    project itself* — leaving untracked files in master that then
+    broke the Reviewer's merge of the builder's worktree.
+    Workers do the editing; the planner plans. Keep this `/tmp`
+    until we wire `--allowed-tools` to restrict the planner to
+    Read/Grep/Glob.
+    """
     worker = ClaudeCLIWorker()
     prompt = _build_prompt(message, history or [])
+
+    # Project_path is accepted for future read-only modes but currently
+    # ignored — see the docstring above.
+    _ = project_path
+    cwd = "/tmp"
 
     config = WorkerConfig(
         agent_id=f"orchestrator-{session_id}",
         session_id=session_id,
         model=model,
-        worktree_path="/tmp",
+        worktree_path=cwd,
         max_turns=3,
     )
 
     chunks: list[str] = []
+    final_text: str | None = None  # populated when TEXT_DONE arrives
     async for event in worker.run(prompt, config):
         if event.type == EventType.TEXT_DELTA and event.text:
             chunks.append(event.text)
+        elif event.type == EventType.TEXT_DONE and event.text:
+            # The consolidated assistant message — supersedes partial
+            # chunks so we don't end up double-counting the text.
+            final_text = event.text
         elif event.type == EventType.AGENT_ERROR:
             logger.error("Orchestrator failed: %s", event.error)
             return OrchestratorDecision(
@@ -128,7 +151,7 @@ async def orchestrate(
                 composition=_fallback_team(),
             )
 
-    return _parse_decision("".join(chunks))
+    return _parse_decision(final_text if final_text is not None else "".join(chunks))
 
 
 def _build_prompt(message: str, history: list[dict]) -> str:

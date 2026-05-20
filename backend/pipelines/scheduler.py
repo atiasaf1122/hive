@@ -38,6 +38,7 @@ async def _fire_pipeline(pipeline_id: str, db_path: Path = DB_PATH) -> None:
     await db_create_session(
         session_id,
         name=pipeline["task"][:80],
+        path=str(workspace),
         approval_mode=pipeline["approval_mode"],
         db_path=db_path,
     )

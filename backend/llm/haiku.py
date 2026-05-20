@@ -98,6 +98,7 @@ class HaikuCaller:
         )
 
         chunks: list[str] = []
+        final_text: str | None = None
         last_cost: HiveEvent | None = None
 
         async for ev in self.worker.run(prompt, config):
@@ -110,6 +111,11 @@ class HaikuCaller:
                     if sum(len(c) for c in chunks) >= self.max_response_len:
                         await self.worker.kill(agent_id)
                         break
+            elif ev.type in (EventType.TEXT_DONE, EventType.TEXT_DONE.value):
+                # Consolidated assistant message — supersedes partial
+                # chunks so we don't return the response doubled.
+                if ev.text:
+                    final_text = ev.text
             elif ev.type in (EventType.COST, EventType.COST.value):
                 last_cost = ev
             elif ev.type in (EventType.AGENT_ERROR, EventType.AGENT_ERROR.value):
@@ -118,6 +124,8 @@ class HaikuCaller:
         if last_cost is not None:
             await self._record_cost(last_cost, agent_id)
 
+        if final_text is not None:
+            return final_text.strip()
         return "".join(chunks).strip()
 
     @property

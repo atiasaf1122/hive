@@ -182,7 +182,10 @@ async def run_pipeline_now(pipeline_id: str) -> dict:
     workspace = Path.home() / ".hive" / "sessions" / session_id
     workspace.mkdir(parents=True, exist_ok=True)
 
-    await db_create_session(session_id, name=p["task"][:80], approval_mode=p["approval_mode"])
+    await db_create_session(
+        session_id, name=p["task"][:80], path=str(workspace),
+        approval_mode=p["approval_mode"],
+    )
     run_id = await record_pipeline_run(pipeline_id, session_id, triggered_by="manual")
 
     await _trigger_pipeline_run(p, run_id, session_id, workspace)
@@ -200,7 +203,10 @@ async def webhook_trigger(token: str) -> dict:
     workspace = Path.home() / ".hive" / "sessions" / session_id
     workspace.mkdir(parents=True, exist_ok=True)
 
-    await db_create_session(session_id, name=p["task"][:80], approval_mode=p["approval_mode"])
+    await db_create_session(
+        session_id, name=p["task"][:80], path=str(workspace),
+        approval_mode=p["approval_mode"],
+    )
     run_id = await record_pipeline_run(p["id"], session_id, triggered_by="webhook")
 
     await _trigger_pipeline_run(p, run_id, session_id, workspace)

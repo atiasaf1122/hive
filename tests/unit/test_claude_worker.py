@@ -56,7 +56,9 @@ async def test_agent_start_from_init_event():
 
 
 @pytest.mark.asyncio
-async def test_text_delta_forwarded():
+async def test_text_done_forwarded():
+    """The consolidated `assistant` message arrives as TEXT_DONE so
+    consumers don't double-count partial deltas + final text."""
     proc = _build_mock_process(
         {"type": "assistant", "message": {"content": [{"type": "text", "text": "Hi there"}]}},
     )
@@ -65,7 +67,7 @@ async def test_text_delta_forwarded():
         worker = ClaudeCLIWorker(oauth_token="test-token")
         events = [e async for e in worker.run("hello", _make_config())]
 
-    text_events = [e for e in events if e.type == EventType.TEXT_DELTA]
+    text_events = [e for e in events if e.type == EventType.TEXT_DONE]
     assert text_events[0].text == "Hi there"
 
 

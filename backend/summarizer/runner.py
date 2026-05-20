@@ -114,7 +114,7 @@ def _events_to_transcript(
         d = ev.model_dump() if isinstance(ev, HiveEvent) else ev
         etype = str(d.get("type", "")).split("/")[0]  # 'text/delta' → 'text'
         kind = str(d.get("type", ""))
-        if kind == EventType.TEXT_DELTA or kind == "text/delta":
+        if kind in (EventType.TEXT_DELTA, "text/delta", EventType.TEXT_DONE, "text/done"):
             text = (d.get("text") or "").strip()
             if text:
                 parts.append(text)

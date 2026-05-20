@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import uuid
 from collections import deque
@@ -63,6 +64,43 @@ async def _session_runner(
     and parking for the next user message — until the user closes the project."""
     agent_id = f"worker-{session_id[:8]}"
     await event_bus.emit(session_id, {"type": "session_start", "session_id": session_id, "task": task})
+
+    # Watchdog: if the orchestrator's first claude subprocess doesn't
+    # emit anything for ORCH_STALL_WARN_S, push a diagnostic event so
+    # the UI / Telegram can show "still thinking…" rather than a silent
+    # void. This was the failure mode of the snake-game stall bug —
+    # nothing reached the WebSocket and the session looked frozen.
+    stall_warn_s = float(os.environ.get("HIVE_ORCH_STALL_WARN_S", "30"))
+
+    # Capture the baseline BEFORE creating the watchdog task so the
+    # check doesn't race with the orchestrator's first emit. Without
+    # this, the orchestrator's "thinking" event lands before the
+    # watchdog task starts running, baseline catches up to it, and any
+    # subsequent silence (e.g. waiting on Haiku) trips the warning
+    # spuriously.
+    baseline_id = event_bus.latest_event_id(session_id)
+
+    async def _orchestrator_heartbeat() -> None:
+        # Only fire the stall warning if the orchestrator hasn't produced
+        # ANY event past the initial session_start by the deadline.
+        try:
+            await asyncio.sleep(stall_warn_s)
+            if event_bus.latest_event_id(session_id) > baseline_id:
+                return  # already streaming — silence the warning
+            await event_bus.emit(session_id, {
+                "type": "orchestrator_stall_hint",
+                "session_id": session_id,
+                "elapsed_s": stall_warn_s,
+                "hint": (
+                    f"Orchestrator hasn't streamed anything in {stall_warn_s:.0f}s. "
+                    "If this keeps happening, check `claude --version`, your "
+                    "OAuth token, and the backend logs for a subprocess error."
+                ),
+            })
+        except asyncio.CancelledError:
+            return
+
+    heartbeat = asyncio.create_task(_orchestrator_heartbeat())
 
     try:
         result = await run_session(
@@ -134,6 +172,7 @@ async def _session_runner(
         except Exception as upd_exc:
             logger.warning("Could not mark session %s as failed: %s", session_id, upd_exc)
     finally:
+        heartbeat.cancel()
         _running_tasks.pop(session_id, None)
         _message_queues.pop(session_id, None)
         _pending_approvals.pop(session_id, None)
@@ -287,7 +326,12 @@ async def create_session_endpoint(req: CreateSessionRequest) -> CreateSessionRes
     session_id = uuid.uuid4().hex[:8]
     project_path = _resolve_workspace_path(req.project_path, session_id)
 
-    await db_create_session(session_id, name=req.task[:80], approval_mode=req.approval_mode)
+    await db_create_session(
+        session_id,
+        name=req.task[:80],
+        path=project_path,
+        approval_mode=req.approval_mode,
+    )
 
     launch_session(
         session_id=session_id,

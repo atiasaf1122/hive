@@ -105,6 +105,7 @@ async def orchestrator_node(state: GraphState) -> dict:
         message=message,
         session_id=state["session_id"],
         history=history[:-1],  # don't include the current message twice
+        project_path=state.get("project_path") or state.get("worktree_path"),
     )
 
     composition_dict = {
@@ -746,6 +747,7 @@ async def _execute_worker(
     )
 
     text_parts: list[str] = []
+    final_text: str | None = None    # populated when TEXT_DONE arrives
     result = AgentResult(
         agent_id=agent.agent_id, status="completed", text_output="",
         input_tokens=0, output_tokens=0, cost_usd=0.0, error=None,
@@ -772,6 +774,11 @@ async def _execute_worker(
 
             if event.type == EventType.TEXT_DELTA and event.text:
                 text_parts.append(event.text)
+            elif event.type == EventType.TEXT_DONE and event.text:
+                # Consolidated assistant message — supersedes the
+                # partial deltas so we don't store the same paragraph
+                # twice in `text_output`.
+                final_text = event.text
             elif event.type == EventType.COST:
                 result["input_tokens"] = event.input_tokens or 0
                 result["output_tokens"] = event.output_tokens or 0
@@ -789,7 +796,7 @@ async def _execute_worker(
         result["status"] = "failed"
         result["error"] = str(exc)
 
-    result["text_output"] = "".join(text_parts)
+    result["text_output"] = final_text if final_text is not None else "".join(text_parts)
     await _auto_commit_worktree(agent.worktree_path, agent.agent_id)
     final_status = result["status"]
     await update_agent_status(agent.agent_id, final_status)

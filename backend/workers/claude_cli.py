@@ -99,7 +99,17 @@ class ClaudeCLIWorker:
                 stderr = b""
                 if proc.stderr:
                     stderr = await proc.stderr.read()
-                error_msg = stderr.decode(errors="replace").strip() or f"exit code {exit_code}"
+                # Always include the exit code even when stderr is empty —
+                # an "exit code 1" with no stderr is exactly the failure
+                # mode we hit dogfooding (likely rate-limit / token-expiry).
+                # Surfacing the exit code separately lets the UI distinguish
+                # "claude exited cleanly with an error message" from "claude
+                # crashed without saying anything".
+                stderr_text = stderr.decode(errors="replace").strip()
+                error_msg = (
+                    f"claude exited {exit_code}"
+                    + (f": {stderr_text}" if stderr_text else " (no stderr captured)")
+                )
                 logger.error("claude CLI exited with error | agent=%s: %s", config.agent_id, error_msg)
                 yield HiveEvent(
                     type=EventType.AGENT_ERROR,

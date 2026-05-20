@@ -159,7 +159,14 @@ def _expand(payload: dict, config: WorkerConfig) -> list[HiveEvent]:
                 )]
         return []
 
-    # assistant message with content blocks (text + tool_use)
+    # assistant message with content blocks (text + tool_use).
+    # The consolidated `assistant` message arrives AFTER the partial
+    # `stream_event` deltas. Emitting both as TEXT_DELTA causes
+    # consumers (planner, summariser) to concatenate the same text
+    # twice — visible in the chat as duplicated paragraphs. So we
+    # emit text blocks as TEXT_DONE here; partial chunks below stay
+    # TEXT_DELTA. Consumers that want the canonical final text listen
+    # for TEXT_DONE; consumers that stream listen for TEXT_DELTA.
     if ptype == "assistant":
         message = payload.get("message", {})
         events: list[HiveEvent] = []
@@ -167,7 +174,7 @@ def _expand(payload: dict, config: WorkerConfig) -> list[HiveEvent]:
             btype = block.get("type", "")
             if btype == "text":
                 events.append(HiveEvent(
-                    type=EventType.TEXT_DELTA,
+                    type=EventType.TEXT_DONE,
                     text=block.get("text", ""),
                     **base,
                 ))
