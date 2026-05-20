@@ -81,9 +81,13 @@ Backend detection at startup:
 | Phase 3 | ✅ Complete | Approval modes + confidence escalation |
 | Phase 4 | ✅ Complete | Skills registry + embedding search |
 | Phase 5 | ✅ Complete | Web UI + WebSocket |
-| Phase 6 | ✅ Complete | Persistent pipelines + scheduler |
-| Phase 7 | 🔲 Not started | Telegram bot |
-| Phase 8 | 🔲 Not started | Polish + docs |
+| Phase 6 | ✅ Complete | Persistent pipelines + scheduler — `hive pipelines` CLI, webhook + cron triggers, 27 tests |
+| Phase 7 | ✅ Complete | Telegram bot — aiogram v3, /sessions/attach/close, inline approvals, allowlist, 22 tests |
+| Phase 8 | ✅ Complete | Polish + docs — README, ARCHITECTURE.md, cost dashboard, onboarding, recovery, 189 tests |
+| Phase 9A | ✅ Complete | Tauri 2 desktop scaffold — Python sidecar, theme system (light/dark), sidebar nav, splash, page placeholders |
+| Phase 9B | ✅ Complete | Projects dashboard + browser-tab project view + agents bar + chat with inline activity/approval cards + composer with slash autocomplete + saved templates + Ctrl shortcuts (Windows TitleBar fix) |
+| Phase 9C | ✅ Complete | Automations + Skills (ClawHub/Cookbook/GitHub w/ Feb 2026 attack warning) + Plugins (MCP/Smithery/awesome) + Usage (rate limits not $) + Settings + Onboarding + Ctrl+K + lifecycle endpoint (31 new tests, 220 total) |
+| Phase 9D | 🟡 Partial   | Close-confirm dialog + system tray + sidecar/PyInstaller plumbing wired; actual `.msi` build runs on Windows (runbook in `packaging/BUILD.md`) |
 
 ---
 

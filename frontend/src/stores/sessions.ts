@@ -86,6 +86,24 @@ export const useSessionsStore = create<SessionsStore>((set) => ({
           updated.status = 'planning'
           break
 
+        case 'orchestrator_thinking':
+          updated.status = 'planning'
+          break
+
+        case 'orchestrator_decision':
+        case 'orchestrator_response':
+          // Orchestrator either answered directly or queued a team.
+          break
+
+        case 'awaiting_user':
+          updated.status = 'awaiting_user'
+          break
+
+        case 'session_closed':
+          updated.status = 'closed'
+          updated.interrupt = null
+          break
+
         case 'plan_complete':
           updated.status = 'spawning'
           break

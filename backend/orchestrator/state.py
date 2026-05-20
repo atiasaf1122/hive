@@ -1,4 +1,10 @@
-"""LangGraph GraphState — Phase 3: approval modes extension."""
+"""LangGraph GraphState — orchestrator-first, multi-turn model.
+
+A session stays active until the user explicitly closes it. Each user message
+re-enters the orchestrator, which decides whether to chat, spawn agents, or both.
+The graph loops via `wait_for_user_node` which interrupts until a new message
+(or close signal) arrives.
+"""
 from __future__ import annotations
 
 from typing import Annotated, Any
@@ -31,26 +37,33 @@ class WorkerInput(TypedDict):
 class GraphState(TypedDict):
     # Session identity
     session_id: str
-    task: str
+    task: str            # initial user message; preserved for session naming
     project_path: str
+    db_path: str         # so DB writes from inside graph nodes target the right file
 
-    # Phase 1: single worker config (kept for backwards compat)
+    # Per-agent defaults
     agent_id: str
     model: str
     worktree_path: str
     max_turns: int
 
-    # Phase 2: multi-agent
-    team_composition: dict | None        # raw JSON from Planner
+    # Multi-agent
+    team_composition: dict | None        # raw JSON from orchestrator turn
     spawn_plan: dict | None              # serialised SpawnPlan
-    worker_results: dict[str, AgentResult]  # agent_id -> result
-    review_report: dict | None           # serialised ReviewReport
+    worker_results: dict[str, AgentResult]
+    review_report: dict | None
 
-    # Phase 3: approval
-    approval_mode: str     # 'full-auto' | 'checkpoint' | 'manual'
+    # Approval
+    approval_mode: str   # 'full-auto' | 'checkpoint' | 'manual'
     approval_rejected: bool
 
-    # Final output
+    # Orchestrator-first multi-turn conversation
+    conversation_history: list[dict]     # [{role, content, ts}]
+    pending_message: str                 # the message being processed this turn
+    last_response: str                   # most recent orchestrator reply
+    user_closed: bool                    # set True by wait_for_user when user closes
+
+    # Final result of the most recent turn (used by API/CLI)
     result: AgentResult | None
 
     # LangGraph messages channel

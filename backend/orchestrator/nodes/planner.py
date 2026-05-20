@@ -1,13 +1,22 @@
-"""Planner node — analyzes the task and returns team composition.
+"""Orchestrator decision-maker.
 
-Uses claude:sonnet during development (Opus reserved for production orchestration).
-Returns a structured TeamComposition with roles, models, and counts.
+The orchestrator is the user's permanent contact for a project. Every user
+message is fed to `orchestrate()`, which decides what to do:
+
+  - Just answer (chat, question, follow-up)        → response, empty team
+  - Spawn agents to build something                → response + team
+  - Both (announce the plan + spawn)               → response + team
+
+Backwards-compat:
+  - `_parse_team_composition` and `plan_team` are still exported so existing
+    parser-only tests keep working.
+  - `OrchestratorDecision` is a thin wrapper over `TeamComposition` with an
+    extra `response` string.
 """
 from __future__ import annotations
 
 import json
 import logging
-import re
 
 from backend.workers.base import EventType, WorkerConfig
 from backend.workers.claude_cli import ClaudeCLIWorker
@@ -16,8 +25,11 @@ logger = logging.getLogger(__name__)
 
 PLANNER_MODEL = "claude:sonnet"
 
-_INSTRUCTIONS = """You are the Planner for HIVE, an AI agent orchestration system.
-Analyze the given task and return ONLY a JSON object — no explanation, no markdown.
+_INSTRUCTIONS = """You are the Orchestrator for HIVE, an AI agent swarm.
+The user is your permanent contact for this project — they may send many messages over its lifetime.
+Look at the conversation history and the latest user message, then decide what to do.
+
+Return ONLY a JSON object — no explanation, no markdown.
 
 Available roles:
 - Thinker: architecture planning. model: claude:sonnet
@@ -32,6 +44,7 @@ Available roles:
 
 Return this exact JSON structure:
 {
+  "response": "your direct reply to the user (always present, can be brief)",
   "team": [
     {"role": "Builder", "model": "claude:sonnet", "count": 1, "passive": false}
   ],
@@ -39,7 +52,11 @@ Return this exact JSON structure:
   "rationale": "one line reason"
 }
 
-Rules: 1-5 active agents. passive=true for Debugger only. No markdown, no extra text."""
+Rules:
+- If the user is just chatting / asking a question / following up → set `team: []` and put your answer in `response`.
+- If the user wants something built/edited/fixed → list 1-5 active agents in `team` and put a short acknowledgement in `response`.
+- passive=true for Debugger only.
+- No markdown, no extra text outside the JSON."""
 
 
 class TeamMember:
@@ -67,43 +84,124 @@ class TeamComposition:
         return f"TeamComposition(members={self.team}, confidence={self.confidence:.2f})"
 
 
-async def plan_team(
-    task: str,
-    session_id: str,
-    model: str = PLANNER_MODEL,
-) -> TeamComposition:
-    """Call the Planner LLM and parse its team composition response."""
-    worker = ClaudeCLIWorker()
+class OrchestratorDecision:
+    """A single orchestrator turn output: a reply to the user, plus an optional team to spawn."""
 
-    prompt = _INSTRUCTIONS + "\n\nTask: " + task + "\n\nJSON only:"
+    def __init__(self, response: str, composition: TeamComposition) -> None:
+        self.response = response
+        self.composition = composition
+
+    @property
+    def has_active_team(self) -> bool:
+        return self.composition.total_active > 0
+
+    def __repr__(self) -> str:
+        return f"OrchestratorDecision(response={self.response[:40]!r}, team={self.composition})"
+
+
+async def orchestrate(
+    message: str,
+    session_id: str,
+    history: list[dict] | None = None,
+    model: str = PLANNER_MODEL,
+) -> OrchestratorDecision:
+    """Run one orchestrator turn — answer the user, optionally with a team to spawn."""
+    worker = ClaudeCLIWorker()
+    prompt = _build_prompt(message, history or [])
 
     config = WorkerConfig(
-        agent_id=f"planner-{session_id}",
+        agent_id=f"orchestrator-{session_id}",
         session_id=session_id,
         model=model,
         worktree_path="/tmp",
         max_turns=3,
     )
 
-    full_text: list[str] = []
+    chunks: list[str] = []
     async for event in worker.run(prompt, config):
         if event.type == EventType.TEXT_DELTA and event.text:
-            full_text.append(event.text)
+            chunks.append(event.text)
         elif event.type == EventType.AGENT_ERROR:
-            logger.error("Planner failed: %s", event.error)
-            return _fallback_team()
+            logger.error("Orchestrator failed: %s", event.error)
+            return OrchestratorDecision(
+                response="(orchestrator failed — please try again)",
+                composition=_fallback_team(),
+            )
 
-    raw = "".join(full_text)
-    return _parse_team_composition(raw)
+    return _parse_decision("".join(chunks))
+
+
+def _build_prompt(message: str, history: list[dict]) -> str:
+    parts = [_INSTRUCTIONS, ""]
+    if history:
+        parts.append("Conversation so far:")
+        for entry in history[-10:]:  # last 10 turns
+            role = entry.get("role", "user").capitalize()
+            content = (entry.get("content") or "").strip()
+            if content:
+                parts.append(f"{role}: {content}")
+        parts.append("")
+    parts.append(f"User: {message}")
+    parts.append("")
+    parts.append("JSON only:")
+    return "\n".join(parts)
+
+
+def _parse_decision(raw: str) -> OrchestratorDecision:
+    data = _extract_first_json_object(raw)
+    if data is None:
+        logger.warning("Orchestrator returned no JSON -- defaulting to chat-only response")
+        return OrchestratorDecision(
+            response=raw.strip() or "(no response)",
+            composition=TeamComposition(team=[], confidence=0.5, rationale="no JSON returned"),
+        )
+
+    response = (data.get("response") or "").strip()
+    composition = _parse_composition_dict(data)
+    return OrchestratorDecision(response=response, composition=composition)
+
+
+async def plan_team(
+    task: str,
+    session_id: str,
+    model: str = PLANNER_MODEL,
+) -> TeamComposition:
+    """Backwards-compat shim: returns only the team part of an orchestrator turn."""
+    decision = await orchestrate(message=task, session_id=session_id, model=model)
+    return decision.composition
 
 
 def _parse_team_composition(raw: str) -> TeamComposition:
-    """Extract the first JSON object from the LLM response."""
+    """Extract the first JSON object from the LLM response.
+
+    Guarantees the returned TeamComposition has at least one active (non-passive)
+    agent when one was clearly intended — coding tasks must never reach spawn
+    with an empty team.
+    """
     data = _extract_first_json_object(raw)
     if data is None:
         logger.warning("Planner returned no JSON -- using fallback team")
         return _fallback_team()
 
+    composition = _parse_composition_dict(data)
+
+    if composition.total_active == 0:
+        logger.warning("Planner returned 0 active agents -- inserting default Builder")
+        composition.team.append(
+            TeamMember(role="Builder", model="claude:sonnet", count=1, passive=False)
+        )
+        if not composition.rationale:
+            composition.rationale = "auto-added default Builder (planner returned no active agents)"
+
+    return composition
+
+
+def _parse_composition_dict(data: dict) -> TeamComposition:
+    """Same parsing path as `_parse_team_composition` but without the auto-floor.
+
+    The orchestrator path needs an empty team to be a legitimate signal that
+    "no agents needed, just answer". So we keep raw zero-active teams intact.
+    """
     team = []
     for member in data.get("team", []):
         role = member.get("role", "Builder")
@@ -111,9 +209,6 @@ def _parse_team_composition(raw: str) -> TeamComposition:
         count = max(1, int(member.get("count", 1)))
         passive = bool(member.get("passive", False))
         team.append(TeamMember(role=role, model=model, count=count, passive=passive))
-
-    if not team:
-        return _fallback_team()
 
     return TeamComposition(
         team=team,

@@ -1,0 +1,104 @@
+/**
+ * TypeScript mirrors of the FastAPI backend DTOs. Only the fields the UI
+ * actually uses are required — extra fields from the server are ignored.
+ */
+
+export type SessionStatus =
+  | 'active'
+  | 'starting'
+  | 'planning'
+  | 'spawning'
+  | 'running'
+  | 'awaiting_user'
+  | 'waiting_approval'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'closed'
+
+export interface AgentInfo {
+  agent_id: string
+  role: string
+  model: string
+  status: 'idle' | 'running' | 'completed' | 'failed' | string
+}
+
+export interface SessionInfo {
+  session_id: string
+  name: string
+  status: SessionStatus
+  approval_mode: string
+  created_at: string
+  last_active: string
+  agents?: AgentInfo[]
+}
+
+export interface ConversationEntry {
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  ts: number
+}
+
+export interface TeamMember {
+  role: string
+  model: string
+  count: number
+  passive?: boolean
+}
+
+export interface TeamComposition {
+  team: TeamMember[]
+  confidence: number
+  rationale: string
+}
+
+export interface InterruptPayload {
+  type: 'team_approval' | 'awaiting_input'
+  session_id: string
+  team_composition?: TeamComposition
+  confidence?: number
+  reason?: string
+  last_response?: string
+}
+
+/* ── Live WS events (loose — only the fields we read are typed) ───────── */
+
+export interface WSEvent {
+  type: string
+  session_id?: string
+  agent_id?: string
+  ts?: string
+  text?: string
+  error?: string
+  input_tokens?: number
+  output_tokens?: number
+  cost_usd?: number
+  payload?: InterruptPayload
+  team_composition?: TeamComposition
+  agents?: AgentInfo[]
+  status?: string
+  task_type?: string
+  last_response?: string
+}
+
+/* ── Cost summary (Phase 8 endpoint, reused for the dashboard sparkline) */
+
+export interface DailyCost {
+  date: string
+  cost_usd: number
+}
+export interface SessionCost {
+  session_id: string
+  name: string
+  cost_usd: number
+  input_tokens: number
+  output_tokens: number
+}
+export interface CostSummary {
+  days: number
+  total_cost_usd: number
+  total_input_tokens: number
+  total_output_tokens: number
+  by_session: SessionCost[]
+  by_day: DailyCost[]
+}

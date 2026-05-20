@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useSessionsStore } from '../stores/sessions'
 import { apiDelete, apiGet, apiPost } from '../ws'
+import { CostDashboard } from './CostDashboard'
 import { PipelineBuilder } from './PipelineBuilder'
 import { PipelineCard } from './PipelineCard'
 import { ProjectCard } from './ProjectCard'
@@ -180,6 +181,10 @@ export function Dashboard() {
             )}
           </div>
         )}
+
+        <div className="mt-8">
+          <CostDashboard />
+        </div>
       </div>
     </div>
   )

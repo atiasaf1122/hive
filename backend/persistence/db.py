@@ -102,6 +102,48 @@ CREATE INDEX IF NOT EXISTS idx_pipeline_runs_pl ON pipeline_runs(pipeline_id);
 CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
 CREATE INDEX IF NOT EXISTS idx_events_agent   ON events(agent_id);
 CREATE INDEX IF NOT EXISTS idx_agents_session ON agents(session_id);
+
+-- Phase 10 (Production v1.0) — command sandbox + circuit breakers.
+CREATE TABLE IF NOT EXISTS command_audit (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts              DATETIME NOT NULL DEFAULT (datetime('now')),
+    project_id      TEXT NOT NULL DEFAULT '',
+    agent_id        TEXT NOT NULL DEFAULT '',
+    command         TEXT NOT NULL,
+    working_dir     TEXT NOT NULL DEFAULT '',
+    classification  TEXT NOT NULL,         -- 'allowed' | 'confirmed' | 'blocked'
+    decision_source TEXT NOT NULL DEFAULT 'system',  -- 'system' | 'custom'
+    matched_pattern TEXT,
+    exit_code       INTEGER,
+    stdout_excerpt  TEXT,                  -- first 500 chars, truncated
+    stderr_excerpt  TEXT,                  -- first 500 chars, truncated
+    duration_ms     INTEGER,
+    user_approved   INTEGER                -- 1 = yes, 0 = no, NULL = n/a
+);
+CREATE INDEX IF NOT EXISTS idx_command_audit_ts      ON command_audit(ts);
+CREATE INDEX IF NOT EXISTS idx_command_audit_project ON command_audit(project_id);
+CREATE INDEX IF NOT EXISTS idx_command_audit_agent   ON command_audit(agent_id);
+
+-- Phase 10 (Production v1.0) — per-project safety overrides.
+-- One row per session; absent = inherit the build-time HARD_STOPS defaults.
+CREATE TABLE IF NOT EXISTS session_safety_overrides (
+    session_id                       TEXT PRIMARY KEY,
+    max_tokens_per_autonomous_run    INTEGER,
+    max_session_duration_hours       REAL,
+    max_concurrent_agents            INTEGER,
+    max_same_file_edits              INTEGER,
+    notify_at_burn_ratio             REAL,
+    updated_at                       DATETIME NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Phase 10 (Production v1.0) — trust scores (Section 5.5).
+CREATE TABLE IF NOT EXISTS worker_trust_scores (
+    worker_id              TEXT PRIMARY KEY,
+    successful_completions INTEGER NOT NULL DEFAULT 0,
+    failed_validations     INTEGER NOT NULL DEFAULT 0,
+    total_sessions         INTEGER NOT NULL DEFAULT 0,
+    last_updated           DATETIME NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 

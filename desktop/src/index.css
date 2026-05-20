@@ -1,0 +1,113 @@
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Design tokens ──────────────────────────────────────────────────── */
+/*  Warm light by default; .dark on <html> swaps every token instantly.   */
+
+:root {
+  /* Background scale */
+  --c-bg: 251 250 247;          /* #FBFAF7 warm off-white */
+  --c-surface: 255 255 255;     /* card / panel */
+  --c-surface-2: 246 244 239;   /* nested surface */
+
+  /* Text */
+  --c-ink: 26 24 20;            /* #1A1814 */
+  --c-ink-muted: 107 100 91;    /* #6B645B */
+  --c-ink-faint: 168 161 149;   /* #A8A195 */
+
+  /* Border (low-contrast hairline) */
+  --c-line: 232 228 220;        /* #E8E4DC */
+
+  /* Accent (warm orange) */
+  --c-accent: 245 166 35;       /* #F5A623 */
+  --c-accent-warm: 216 90 48;   /* #D85A30 */
+
+  color-scheme: light;
+}
+
+.dark {
+  --c-bg: 26 24 20;             /* #1A1814 */
+  --c-surface: 34 31 26;        /* #221F1A */
+  --c-surface-2: 40 37 31;      /* #28251F */
+
+  --c-ink: 250 248 243;         /* #FAF8F3 */
+  --c-ink-muted: 163 155 140;   /* #A39B8C */
+  --c-ink-faint: 110 103 92;    /* #6E675C */
+
+  --c-line: 46 42 36;           /* #2E2A24 */
+
+  --c-accent: 245 166 35;
+  --c-accent-warm: 216 90 48;
+
+  color-scheme: dark;
+}
+
+/* Base typography — never bold per design system */
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'cv11', 'ss01';
+  font-weight: 400;
+  letter-spacing: -0.005em;
+}
+
+/* macOS-style scrollbars across the app */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgb(var(--c-line));
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--c-ink-faint));
+  background-clip: content-box;
+  border: 2px solid transparent;
+}
+
+/* Reusable component shorthands */
+@layer components {
+  .card {
+    @apply rounded-card bg-surface border border-line transition-shadow;
+  }
+  .card-hover {
+    @apply hover:shadow-hover dark:hover:shadow-hoverDark;
+  }
+  .btn-primary {
+    @apply bg-accent-gradient text-white px-4 py-2 rounded-soft font-medium transition-transform active:scale-[0.98];
+  }
+  .btn-ghost {
+    @apply text-ink-muted hover:text-ink hover:bg-surface-2 px-3 py-1.5 rounded-soft transition-colors;
+  }
+  .input-soft {
+    @apply bg-surface border border-line rounded-soft px-3 py-2 text-ink placeholder:text-ink-faint focus:outline-none focus:border-accent;
+  }
+}
+
+/* Tauri window: hide native title bar with our decorations=false config,
+   but keep the entire chrome draggable. */
+.titlebar-drag {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+.titlebar-nodrag {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}

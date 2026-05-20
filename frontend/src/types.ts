@@ -18,6 +18,8 @@ export type SessionStatus =
   | 'spawning'
   | 'running'
   | 'waiting_approval'
+  | 'awaiting_user'
+  | 'closed'
   | 'completed'
   | 'failed'
   | 'cancelled'

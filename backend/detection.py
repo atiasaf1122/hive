@@ -84,14 +84,27 @@ async def _check_claude_api() -> bool:
 
 
 async def _check_ollama() -> tuple[bool, list[str]]:
-    try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            response = await client.get(f"{_OLLAMA_BASE}/api/tags")
-            if response.status_code != 200:
-                return False, []
-            data = response.json()
-            models = [m["name"] for m in data.get("models", [])]
-            return True, models
-    except Exception as exc:
-        logger.debug("Ollama check failed: %s", exc)
-        return False, []
+    """Probe Ollama. Tries the configured base first, then a 127.0.0.1
+    fallback (host-as-localhost can resolve to ::1 first and miss an
+    IPv4-only Ollama, e.g. on some WSL2 setups)."""
+    candidates = [_OLLAMA_BASE]
+    if "localhost" in _OLLAMA_BASE:
+        candidates.append(_OLLAMA_BASE.replace("localhost", "127.0.0.1"))
+
+    last_exc: Exception | None = None
+    for base in candidates:
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                response = await client.get(f"{base}/api/tags")
+                if response.status_code != 200:
+                    last_exc = RuntimeError(f"HTTP {response.status_code} from {base}")
+                    continue
+                data = response.json()
+                models = [m["name"] for m in data.get("models", [])]
+                return True, models
+        except Exception as exc:
+            last_exc = exc
+            logger.debug("Ollama check failed at %s: %s", base, exc)
+    if last_exc:
+        logger.debug("Ollama unreachable on all candidates: %s", last_exc)
+    return False, []

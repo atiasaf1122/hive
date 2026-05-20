@@ -143,11 +143,37 @@ async def delete_pipeline_endpoint(pipeline_id: str) -> None:
     await delete_pipeline(pipeline_id)
 
 
+async def _trigger_pipeline_run(p: dict, run_id: str, session_id: str, workspace: Path) -> None:
+    """Common helper for /run and /webhook — launches and watches the session task."""
+    import asyncio
+    import logging
+
+    from backend.api.http import launch_session
+
+    logger = logging.getLogger(__name__)
+
+    task = launch_session(
+        session_id=session_id,
+        task=p["task"],
+        model=p["model"],
+        approval_mode=p["approval_mode"],
+        project_path=str(workspace),
+    )
+
+    async def _watch(t: asyncio.Task, rid: str) -> None:
+        try:
+            await t
+            await finish_pipeline_run(rid, "completed")
+        except Exception as exc:
+            logger.warning("Pipeline run %s failed: %s", rid, exc)
+            await finish_pipeline_run(rid, "failed")
+
+    asyncio.create_task(_watch(task, run_id))
+
+
 @router.post("/{pipeline_id}/run", response_model=dict)
 async def run_pipeline_now(pipeline_id: str) -> dict:
     """Manually trigger a pipeline run immediately."""
-    from backend.api.http import launch_session
-
     p = await get_pipeline(pipeline_id)
     if not p:
         raise HTTPException(status_code=404, detail="Pipeline not found")
@@ -159,33 +185,13 @@ async def run_pipeline_now(pipeline_id: str) -> dict:
     await db_create_session(session_id, name=p["task"][:80], approval_mode=p["approval_mode"])
     run_id = await record_pipeline_run(pipeline_id, session_id, triggered_by="manual")
 
-    import asyncio
-
-    task = launch_session(
-        session_id=session_id,
-        task=p["task"],
-        model=p["model"],
-        approval_mode=p["approval_mode"],
-        project_path=str(workspace),
-    )
-
-    async def _watch(t: asyncio.Task, rid: str) -> None:
-        try:
-            await t
-            await finish_pipeline_run(rid, "completed")
-        except Exception:
-            await finish_pipeline_run(rid, "failed")
-
-    asyncio.create_task(_watch(task, run_id))
-
+    await _trigger_pipeline_run(p, run_id, session_id, workspace)
     return {"session_id": session_id, "run_id": run_id}
 
 
 @router.post("/webhook/{token}", response_model=dict)
 async def webhook_trigger(token: str) -> dict:
     """Trigger a pipeline via its webhook token."""
-    from backend.api.http import launch_session
-
     p = await get_pipeline_by_webhook(token)
     if not p:
         raise HTTPException(status_code=404, detail="No pipeline for this token")
@@ -197,25 +203,7 @@ async def webhook_trigger(token: str) -> dict:
     await db_create_session(session_id, name=p["task"][:80], approval_mode=p["approval_mode"])
     run_id = await record_pipeline_run(p["id"], session_id, triggered_by="webhook")
 
-    import asyncio
-
-    task = launch_session(
-        session_id=session_id,
-        task=p["task"],
-        model=p["model"],
-        approval_mode=p["approval_mode"],
-        project_path=str(workspace),
-    )
-
-    async def _watch(t: asyncio.Task, rid: str) -> None:
-        try:
-            await t
-            await finish_pipeline_run(rid, "completed")
-        except Exception:
-            await finish_pipeline_run(rid, "failed")
-
-    asyncio.create_task(_watch(task, run_id))
-
+    await _trigger_pipeline_run(p, run_id, session_id, workspace)
     return {"session_id": session_id, "run_id": run_id}
 
 

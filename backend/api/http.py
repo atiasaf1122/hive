@@ -1,9 +1,10 @@
-"""REST API endpoints."""
+"""REST API endpoints — orchestrator-first, multi-turn sessions."""
 from __future__ import annotations
 
 import asyncio
 import logging
 import uuid
+from collections import deque
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -17,16 +18,36 @@ from backend.api.schemas import (
     MessageRequest,
     SessionInfo,
 )
-from backend.orchestrator.graph import SessionInterrupt, resume_session_with_value, run_session
-from backend.persistence.events import create_session as db_create_session
-from backend.persistence.events import get_session, list_agents, list_sessions
+from backend.orchestrator.graph import (
+    SessionInterrupt,
+    get_conversation_history,
+    resume_session_with_value,
+    run_session,
+)
+from backend.persistence.events import (
+    create_session as db_create_session,
+    get_session,
+    list_agents,
+    list_sessions,
+    update_session_status,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
 
-# In-memory state (lost on restart — sessions persist in SQLite)
+# In-memory per-session state (lost on restart — sessions persist in SQLite)
 _pending_approvals: dict[str, asyncio.Future] = {}
+_pending_inputs: dict[str, asyncio.Future] = {}
 _running_tasks: dict[str, asyncio.Task] = {}
+_message_queues: dict[str, deque[str]] = {}
+
+
+def _get_queue(session_id: str) -> deque[str]:
+    q = _message_queues.get(session_id)
+    if q is None:
+        q = deque()
+        _message_queues[session_id] = q
+    return q
 
 
 async def _session_runner(
@@ -37,7 +58,8 @@ async def _session_runner(
     project_path: str,
     max_turns: int,
 ) -> None:
-    """Background coroutine that drives a session to completion, handling interrupts."""
+    """Drive a long-lived session: orchestrator turns, approvals, agent runs,
+    and parking for the next user message — until the user closes the project."""
     agent_id = f"worker-{session_id[:8]}"
     await event_bus.emit(session_id, {"type": "session_start", "session_id": session_id, "task": task})
 
@@ -53,33 +75,50 @@ async def _session_runner(
         )
 
         while isinstance(result, SessionInterrupt):
-            await event_bus.emit(session_id, {
-                "type": "interrupt",
-                "session_id": session_id,
-                "payload": result.payload,
-            })
-            loop = asyncio.get_event_loop()
-            future: asyncio.Future = loop.create_future()
-            _pending_approvals[session_id] = future
-            resume_value = await future
-            _pending_approvals.pop(session_id, None)
+            payload = result.payload
+            payload_type = payload.get("type")
+            resume_value: dict | None = None
+
+            if payload_type == "team_approval":
+                await event_bus.emit(session_id, {
+                    "type": "interrupt",
+                    "session_id": session_id,
+                    "payload": payload,
+                })
+                try:
+                    from backend.telegram.notifier import notify_approval
+                    await notify_approval(session_id, payload)
+                except Exception as exc:
+                    logger.debug("Telegram approval notify skipped: %s", exc)
+                loop = asyncio.get_event_loop()
+                future: asyncio.Future = loop.create_future()
+                _pending_approvals[session_id] = future
+                resume_value = await future
+                _pending_approvals.pop(session_id, None)
+
+            elif payload_type == "awaiting_input":
+                # If a message was queued while agents were running, use it now.
+                queue = _get_queue(session_id)
+                if queue:
+                    resume_value = {"text": queue.popleft()}
+                else:
+                    loop = asyncio.get_event_loop()
+                    future = loop.create_future()
+                    _pending_inputs[session_id] = future
+                    resume_value = await future
+                    _pending_inputs.pop(session_id, None)
+
+            else:
+                logger.warning("Unknown interrupt payload type %r — ending session", payload_type)
+                break
+
             result = await resume_session_with_value(session_id, resume_value)
 
-        status = "completed"
-        text_output = ""
-        cost_usd = 0.0
-        if result:
-            r = result if isinstance(result, dict) else dict(result)
-            status = r.get("status", "completed")
-            text_output = r.get("text_output", "")
-            cost_usd = r.get("cost_usd", 0.0)
-
+        # Graph reached END — happens when the user closes the project.
         await event_bus.emit(session_id, {
             "type": "session_end",
             "session_id": session_id,
-            "status": status,
-            "text_output": text_output[:500] if text_output else "",
-            "cost_usd": cost_usd,
+            "status": "closed",
         })
 
     except Exception as exc:
@@ -89,8 +128,15 @@ async def _session_runner(
             "session_id": session_id,
             "error": str(exc),
         })
+        try:
+            await update_session_status(session_id, "failed")
+        except Exception as upd_exc:
+            logger.warning("Could not mark session %s as failed: %s", session_id, upd_exc)
     finally:
         _running_tasks.pop(session_id, None)
+        _message_queues.pop(session_id, None)
+        _pending_approvals.pop(session_id, None)
+        _pending_inputs.pop(session_id, None)
 
 
 def launch_session(
@@ -117,6 +163,8 @@ def launch_session(
     return t
 
 
+# ── REST endpoints ───────────────────────────────────────────────────────────
+
 @router.post("/sessions", response_model=CreateSessionResponse)
 async def create_session_endpoint(req: CreateSessionRequest) -> CreateSessionResponse:
     session_id = uuid.uuid4().hex[:8]
@@ -127,7 +175,6 @@ async def create_session_endpoint(req: CreateSessionRequest) -> CreateSessionRes
         workspace.mkdir(parents=True, exist_ok=True)
         project_path = str(workspace)
 
-    # Pre-create the DB record so approval_mode is persisted immediately
     await db_create_session(session_id, name=req.task[:80], approval_mode=req.approval_mode)
 
     launch_session(
@@ -182,6 +229,16 @@ async def get_session_endpoint(session_id: str) -> SessionInfo:
     )
 
 
+@router.get("/sessions/{session_id}/history")
+async def get_session_history(session_id: str) -> dict:
+    """Return the orchestrator conversation history for the session."""
+    session = await get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    history = await get_conversation_history(session_id)
+    return {"session_id": session_id, "history": history}
+
+
 @router.post("/sessions/{session_id}/approve")
 async def approve_session(session_id: str, req: ApproveRequest) -> dict:
     future = _pending_approvals.get(session_id)
@@ -196,11 +253,51 @@ async def approve_session(session_id: str, req: ApproveRequest) -> dict:
 
 @router.post("/sessions/{session_id}/message")
 async def send_message(session_id: str, req: MessageRequest) -> dict:
+    """Send a message to the orchestrator.
+
+    If the graph is parked waiting for input → resume immediately.
+    Otherwise (agents running, awaiting approval) → queue for next park.
+    """
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Empty message")
+
     await event_bus.emit(session_id, {
         "type": "user_message",
         "session_id": session_id,
         "agent_id": req.agent_id,
-        "text": req.text,
+        "text": text,
         "urgency": req.urgency,
     })
-    return {"ok": True}
+
+    future = _pending_inputs.get(session_id)
+    if future and not future.done():
+        future.set_result({"text": text})
+        _pending_inputs.pop(session_id, None)
+        return {"ok": True, "queued": False}
+
+    _get_queue(session_id).append(text)
+    return {"ok": True, "queued": True}
+
+
+@router.post("/sessions/{session_id}/close")
+async def close_session(session_id: str) -> dict:
+    """Close the project. The orchestrator parks → END, session marked closed."""
+    session = await get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    future = _pending_inputs.get(session_id)
+    if future and not future.done():
+        future.set_result({"close": True})
+        _pending_inputs.pop(session_id, None)
+        return {"ok": True, "status": "closing"}
+
+    # Session isn't parked at wait_for_user — mark closed and let the runner
+    # exit on its own. Any in-flight agents will finish.
+    await update_session_status(session_id, "closed")
+    await event_bus.emit(session_id, {
+        "type": "session_closed",
+        "session_id": session_id,
+    })
+    return {"ok": True, "status": "closed"}

@@ -37,13 +37,52 @@ class WorktreeManager:
         return self.session_root / agent_id
 
     async def ensure_git_repo(self) -> None:
-        """Init a git repo in the project dir if one doesn't exist."""
+        """Init a git repo in the project dir if one doesn't exist.
+
+        Self-heal: if the *global* git identity isn't set, write a local
+        identity so the bootstrap commit works. Without this, missing
+        ``user.name`` / ``user.email`` causes the commit to fail with
+        "Author identity unknown" and the entire orchestration silently
+        stalls — that was the snake-game bug in Phase 9C testing.
+        """
         git_dir = self.project_path / ".git"
         if not git_dir.exists():
             logger.info("Initializing git repo in %s", self.project_path)
             await _run("git", "init", cwd=self.project_path)
-            # Need at least one commit for worktrees to work
-            await _run("git", "commit", "--allow-empty", "-m", "chore: init repo for HIVE", cwd=self.project_path)
+
+        await self._ensure_local_identity()
+
+        # Need at least one commit for worktrees to work.
+        try:
+            await _run("git", "rev-parse", "HEAD", cwd=self.project_path)
+        except RuntimeError:
+            await _run(
+                "git", "commit", "--allow-empty",
+                "-m", "chore: init repo for HIVE",
+                cwd=self.project_path,
+            )
+
+    async def _ensure_local_identity(self) -> None:
+        """If the global identity is missing, write a per-repo fallback."""
+        # Check current effective identity from inside the repo.
+        try:
+            name = await _run("git", "config", "--get", "user.name", cwd=self.project_path)
+        except RuntimeError:
+            name = ""
+        try:
+            email = await _run("git", "config", "--get", "user.email", cwd=self.project_path)
+        except RuntimeError:
+            email = ""
+
+        if name.strip() and email.strip():
+            return
+
+        logger.warning(
+            "No git identity for %s — writing local fallback so worktree commits don't stall.",
+            self.project_path,
+        )
+        await _run("git", "config", "user.name", "HIVE", cwd=self.project_path)
+        await _run("git", "config", "user.email", "hive@localhost", cwd=self.project_path)
 
     async def create(self, agent_id: str, branch_name: str | None = None) -> Path:
         """Create a git worktree for an agent. Returns the worktree path."""

@@ -2,6 +2,12 @@
 
 Invariant from HIVE_BUILD_PLAN: always buffer chunks, split on \n,
 parse each line as a separate JSON object. Never parse raw text output.
+
+Phase 10 hardening (Section 8.1): cap the buffer at MAX_BUFFER. A
+single line longer than that is treated as corrupted — we look for the
+next newline, drop everything up to it, and keep going. Without this,
+a malformed upstream that never emits `\n` would let memory grow
+unboundedly until OOM.
 """
 from __future__ import annotations
 
@@ -14,6 +20,16 @@ from backend.workers.base import EventType, HiveEvent, WorkerConfig
 
 logger = logging.getLogger(__name__)
 
+# 1 MB is comfortably above any sane single stream-json line — the claude
+# CLI's biggest events (tool_result with large stdout) usually sit under
+# 64 kB. Anything past 1 MB is corrupted, not real.
+MAX_BUFFER = 1_048_576
+
+# Stop reading from a stream that's been silent for this long. The env
+# var lets ops dial it per-environment without redeploying.
+import os as _os
+IDLE_TIMEOUT_MS = int(_os.environ.get("CLAUDE_STREAM_IDLE_TIMEOUT_MS", "600000"))  # 10 min default
+
 
 async def parse_stream(
     stdout: asyncio.StreamReader,
@@ -21,16 +37,59 @@ async def parse_stream(
 ) -> AsyncIterator[HiveEvent]:
     """Read raw bytes from claude CLI stdout, yield HiveEvents.
 
-    Handles partial chunks: accumulates a byte buffer and splits on newlines.
-    Each complete line is parsed as one JSON event.
+    Handles partial chunks: accumulates a byte buffer and splits on
+    newlines. Each complete line is parsed as one JSON event.
+    Defensive against:
+
+      - lines longer than MAX_BUFFER (treated as corrupt; recover from
+        next newline)
+      - non-JSON lines (logged at debug, dropped)
+      - long silences (raises asyncio.TimeoutError so the worker can
+        surface the stall instead of hanging forever)
     """
     buf = b""
 
     while True:
-        chunk = await stdout.read(4096)
+        try:
+            chunk = await asyncio.wait_for(
+                stdout.read(4096),
+                timeout=IDLE_TIMEOUT_MS / 1000.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Stream parser: no output for %d ms — abandoning read.",
+                IDLE_TIMEOUT_MS,
+            )
+            return
         if not chunk:
+            # EOF — flush any complete lines left in the buffer before we
+            # leave. Otherwise an event that arrived right before the
+            # process closed (or that follows an overflow recovery) would
+            # be silently dropped.
+            for event in _flush_lines(buf, config):
+                yield event
             break
         buf += chunk
+
+        # Defensive: if the buffer balloons past MAX_BUFFER without a newline,
+        # the upstream is malformed. Reset to the next newline if any,
+        # otherwise drop everything and keep reading.
+        if len(buf) > MAX_BUFFER:
+            nl = buf.find(b"\n")
+            if nl >= 0:
+                dropped = nl + 1
+                buf = buf[dropped:]
+                logger.warning(
+                    "Stream parser: dropped %d bytes (oversized line, recovered to next newline).",
+                    dropped,
+                )
+            else:
+                logger.warning(
+                    "Stream parser: dropped %d bytes (no newline in oversized buffer).",
+                    len(buf),
+                )
+                buf = b""
+            continue
 
         while b"\n" in buf:
             raw_line, buf = buf.split(b"\n", 1)
@@ -46,6 +105,29 @@ async def parse_stream(
 
             for event in _expand(payload, config):
                 yield event
+
+
+def _flush_lines(buf: bytes, config: WorkerConfig) -> list[HiveEvent]:
+    """Parse every newline-terminated line in buf and return their events.
+
+    Used at EOF to drain a final batch that survived an overflow-recovery
+    `continue` step. We deliberately ignore any trailing partial line —
+    it's incomplete by definition.
+    """
+    if not buf:
+        return []
+    out: list[HiveEvent] = []
+    for raw_line in buf.split(b"\n"):
+        raw_line = raw_line.strip()
+        if not raw_line:
+            continue
+        try:
+            payload = json.loads(raw_line)
+        except json.JSONDecodeError:
+            logger.debug("Non-JSON line at EOF: %s", raw_line[:120])
+            continue
+        out.extend(_expand(payload, config))
+    return out
 
 
 def _expand(payload: dict, config: WorkerConfig) -> list[HiveEvent]:

@@ -22,7 +22,11 @@ import typer
 
 app = typer.Typer(help="HIVE — AI agent swarm orchestration")
 skills_app = typer.Typer(help="Manage HIVE skills")
+pipelines_app = typer.Typer(help="Manage HIVE persistent pipelines (Phase 6)")
+telegram_app = typer.Typer(help="Configure the HIVE Telegram bot (Phase 7)")
 app.add_typer(skills_app, name="skills")
+app.add_typer(pipelines_app, name="pipelines")
+app.add_typer(telegram_app, name="telegram")
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -63,6 +67,17 @@ def run(
 def status() -> None:
     """Show which backends are available on this machine."""
     asyncio.run(_status_async())
+
+
+@app.command()
+def onboard() -> None:
+    """First-run setup wizard — sanity-checks the environment for HIVE."""
+    from backend.onboarding import render_report, run_onboarding
+    checks = asyncio.run(run_onboarding())
+    typer.echo(render_report(checks))
+    fails = sum(1 for c in checks if not c.ok)
+    if fails:
+        raise typer.Exit(code=1)
 
 
 @app.command()
@@ -425,6 +440,221 @@ async def _skills_test_async(query: str, top_k: int, threshold: float) -> None:
             typer.echo(f"   tags: {', '.join(skill.tags)}")
         typer.echo()
 
+
+# ── pipelines commands ────────────────────────────────────────────────────────
+
+@pipelines_app.command("list")
+def pipelines_list() -> None:
+    """List all persistent pipelines."""
+    asyncio.run(_pipelines_list_async())
+
+
+@pipelines_app.command("create")
+def pipelines_create(
+    name: str = typer.Argument(..., help="Pipeline name"),
+    task: str = typer.Option(..., "--task", "-t", help="Task prompt to run"),
+    schedule: str = typer.Option(None, "--schedule", "-s", help='Cron expression, e.g. "0 17 * * *"'),
+    model: str = typer.Option("claude:sonnet", "--model", "-m"),
+    approval_mode: str = typer.Option("full-auto", "--approval-mode", "-a"),
+) -> None:
+    """Create a new pipeline. Optionally schedule it with cron."""
+    if approval_mode not in _APPROVAL_MODES:
+        typer.echo(f"[error] Unknown approval mode '{approval_mode}'.", err=True)
+        raise typer.Exit(code=1)
+    asyncio.run(_pipelines_create_async(name, task, model, approval_mode, schedule))
+
+
+@pipelines_app.command("delete")
+def pipelines_delete(
+    pipeline_id: str = typer.Argument(..., help="Pipeline ID"),
+) -> None:
+    """Delete a pipeline (and its schedule, if any)."""
+    asyncio.run(_pipelines_delete_async(pipeline_id))
+
+
+@pipelines_app.command("run")
+def pipelines_run(
+    pipeline_id: str = typer.Argument(..., help="Pipeline ID to fire immediately"),
+) -> None:
+    """Trigger a one-off run of a pipeline right now."""
+    asyncio.run(_pipelines_run_async(pipeline_id))
+
+
+@pipelines_app.command("runs")
+def pipelines_runs(
+    pipeline_id: str = typer.Argument(..., help="Pipeline ID"),
+    limit: int = typer.Option(20, "--limit", "-n"),
+) -> None:
+    """Show recent runs for a pipeline."""
+    asyncio.run(_pipelines_runs_async(pipeline_id, limit))
+
+
+async def _pipelines_list_async() -> None:
+    from backend.persistence.db import init_db
+    from backend.pipelines.store import list_pipelines
+
+    await init_db()
+    pipelines = await list_pipelines()
+    if not pipelines:
+        typer.echo("No pipelines registered. Use 'hive pipelines create' to add one.")
+        return
+    typer.echo(f"{'ID':<14} {'Status':<9} {'Schedule':<15} {'Name'}")
+    typer.echo("─" * 75)
+    for p in pipelines:
+        status = "enabled" if p["enabled"] else "disabled"
+        schedule = p.get("schedule") or "manual"
+        typer.echo(f"{p['id']:<14} {status:<9} {schedule:<15} {p['name']}")
+
+
+async def _pipelines_create_async(
+    name: str, task: str, model: str, approval_mode: str, schedule: str | None,
+) -> None:
+    from backend.persistence.db import init_db
+    from backend.pipelines.store import create_pipeline, get_pipeline
+
+    await init_db()
+    pid = await create_pipeline(
+        name=name, task=task, model=model, approval_mode=approval_mode, schedule=schedule,
+    )
+    p = await get_pipeline(pid)
+    typer.echo(f"Created pipeline: {pid}")
+    typer.echo(f"  name:     {p['name']}")
+    typer.echo(f"  task:     {p['task']}")
+    typer.echo(f"  schedule: {p.get('schedule') or '(manual)'}")
+    typer.echo(f"  webhook:  /api/pipelines/webhook/{p['webhook_token']}")
+
+
+async def _pipelines_delete_async(pipeline_id: str) -> None:
+    from backend.persistence.db import init_db
+    from backend.pipelines.store import delete_pipeline, get_pipeline
+
+    await init_db()
+    p = await get_pipeline(pipeline_id)
+    if not p:
+        typer.echo(f"[error] Pipeline '{pipeline_id}' not found.", err=True)
+        raise typer.Exit(code=1)
+    await delete_pipeline(pipeline_id)
+    typer.echo(f"Deleted pipeline: {pipeline_id}")
+
+
+async def _pipelines_run_async(pipeline_id: str) -> None:
+    from backend.persistence.db import init_db
+    from backend.pipelines.store import get_pipeline
+
+    await init_db()
+    p = await get_pipeline(pipeline_id)
+    if not p:
+        typer.echo(f"[error] Pipeline '{pipeline_id}' not found.", err=True)
+        raise typer.Exit(code=1)
+
+    import os
+    from backend.orchestrator.graph import SessionInterrupt, run_session
+    from backend.persistence.events import create_session as db_create_session
+    from backend.pipelines.store import finish_pipeline_run, record_pipeline_run
+
+    session_id = str(uuid.uuid4())[:8]
+    workspace = os.path.expanduser(f"~/.hive/sessions/{session_id}")
+    os.makedirs(workspace, exist_ok=True)
+
+    await db_create_session(session_id, name=p["task"][:80], approval_mode=p["approval_mode"])
+    run_id = await record_pipeline_run(pipeline_id, session_id, triggered_by="cli")
+    typer.echo(f"Run started: session={session_id} run={run_id}")
+    typer.echo(f"Task: {p['task']}")
+    typer.echo("─" * 60)
+
+    try:
+        result = await run_session(
+            session_id=session_id,
+            agent_id=f"worker-{session_id}",
+            task=p["task"],
+            model=p["model"],
+            worktree_path=workspace,
+            max_turns=20,
+            approval_mode=p["approval_mode"],
+        )
+        if isinstance(result, SessionInterrupt):
+            typer.echo("[paused] Approval required — resume via UI or `hive resume`.")
+            return
+        await finish_pipeline_run(run_id, result.get("status", "completed"))
+        _print_result(result, session_id)
+    except Exception as exc:
+        await finish_pipeline_run(run_id, "failed")
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(code=1)
+
+
+async def _pipelines_runs_async(pipeline_id: str, limit: int) -> None:
+    from backend.persistence.db import init_db
+    from backend.pipelines.store import get_pipeline, list_pipeline_runs
+
+    await init_db()
+    p = await get_pipeline(pipeline_id)
+    if not p:
+        typer.echo(f"[error] Pipeline '{pipeline_id}' not found.", err=True)
+        raise typer.Exit(code=1)
+
+    runs = await list_pipeline_runs(pipeline_id, limit=limit)
+    if not runs:
+        typer.echo("No runs yet.")
+        return
+    typer.echo(f"Runs for '{p['name']}' ({pipeline_id}):")
+    typer.echo(f"{'Run ID':<14} {'Status':<11} {'Trigger':<10} {'Started':<22} Session")
+    typer.echo("─" * 80)
+    for r in runs:
+        typer.echo(
+            f"{r['id']:<14} {r['status']:<11} {r['triggered_by']:<10} "
+            f"{r['started_at']:<22} {r.get('session_id') or '-'}"
+        )
+
+
+# ── telegram commands ────────────────────────────────────────────────────────
+
+@telegram_app.command("setup")
+def telegram_setup(
+    token: str = typer.Option(..., "--token", "-t", help="Bot token from @BotFather"),
+) -> None:
+    """Persist the bot token to ~/.hive/telegram.json (chmod 0600)."""
+    from backend.telegram.config import set_token
+    config = set_token(token)
+    typer.echo("Token saved.")
+    if not config.allowed_chat_ids:
+        typer.echo("Next: send /start from the chat you want to allow, then run:")
+        typer.echo("  hive telegram allow <chat-id>")
+
+
+@telegram_app.command("allow")
+def telegram_allow(
+    chat_id: int = typer.Argument(..., help="Telegram chat ID to allow"),
+) -> None:
+    """Add a chat ID to the allowlist."""
+    from backend.telegram.config import add_allowed_chat
+    config = add_allowed_chat(chat_id)
+    typer.echo(f"Allowed chat IDs: {config.allowed_chat_ids}")
+
+
+@telegram_app.command("revoke")
+def telegram_revoke(
+    chat_id: int = typer.Argument(..., help="Chat ID to remove"),
+) -> None:
+    """Remove a chat from the allowlist."""
+    from backend.telegram.config import remove_allowed_chat
+    config = remove_allowed_chat(chat_id)
+    typer.echo(f"Allowed chat IDs: {config.allowed_chat_ids}")
+
+
+@telegram_app.command("status")
+def telegram_status() -> None:
+    """Show current telegram config."""
+    from backend.telegram.config import load_config
+    config = load_config()
+    typer.echo(f"Token configured: {'yes' if config.token else 'no'}")
+    typer.echo(f"Allowed chats:    {config.allowed_chat_ids or '(none)'}")
+    typer.echo(f"Notify approvals: {config.notify_approvals}")
+    typer.echo(f"Notify end:       {config.notify_session_end}")
+    typer.echo(f"Quiet hours UTC:  {config.quiet_hours or '(none)'}")
+
+
+# ── start ─────────────────────────────────────────────────────────────────────
 
 @app.command()
 def start(

@@ -149,7 +149,7 @@ async def test_run_session_full_auto_low_confidence_returns_interrupt(tmp_path):
 
 @pytest.mark.asyncio
 async def test_resume_with_rejection_returns_cancelled(tmp_path):
-    """Resuming with approved=False should return a cancelled AgentResult."""
+    """Resuming with approved=False should record a cancelled turn, then park for next user message."""
     db = tmp_path / "test.db"
     await init_db(db)
 
@@ -166,7 +166,7 @@ async def test_resume_with_rejection_returns_cancelled(tmp_path):
             approval_mode="checkpoint",
         )
 
-    # Resume with rejection
+    # Resume with rejection — abort node fires, then session parks at wait_for_user
     with _patch_planner():
         result = await resume_session_with_value(
             session_id="sess-rej",
@@ -174,13 +174,25 @@ async def test_resume_with_rejection_returns_cancelled(tmp_path):
             db_path=db,
         )
 
-    assert result["status"] == "cancelled"
-    assert result["error"] == "Task cancelled by user"
+    # Multi-turn semantics: rejection ends *this turn*, session itself stays open
+    assert isinstance(result, SessionInterrupt)
+    assert result.payload["type"] == "awaiting_input"
+
+    # Closing the session surfaces the last per-turn AgentResult (cancelled)
+    with _patch_planner():
+        final = await resume_session_with_value(
+            session_id="sess-rej",
+            resume_value={"close": True},
+            db_path=db,
+        )
+
+    assert final["status"] == "cancelled"
+    assert final["error"] == "Task cancelled by user"
 
 
 @pytest.mark.asyncio
 async def test_resume_with_approval_continues_to_spawn(tmp_path):
-    """Resuming with approved=True should continue past the approval gate."""
+    """Approving the team should run spawn→workers→review, then park for next user message."""
     db = tmp_path / "test.db"
     await init_db(db)
 
@@ -205,8 +217,20 @@ async def test_resume_with_approval_continues_to_spawn(tmp_path):
             db_path=db,
         )
 
-    assert result["status"] in ("completed", "failed")
-    assert result["agent_id"] == "orchestrator"
+    # After agents complete, session parks at wait_for_user — interrupt, not final result
+    assert isinstance(result, SessionInterrupt)
+    assert result.payload["type"] == "awaiting_input"
+
+    # Close to surface the last per-turn AgentResult (from review_node)
+    with _patch_planner(), _patch_spawn_and_run():
+        final = await resume_session_with_value(
+            session_id="sess-ok",
+            resume_value={"close": True},
+            db_path=db,
+        )
+
+    assert final["status"] in ("completed", "failed")
+    assert final["agent_id"] == "orchestrator"
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -236,20 +260,26 @@ def _make_state(approval_mode: str, confidence: float) -> GraphState:
 
 
 def _patch_planner(confidence: float = 0.85):
-    """Patch plan_node to return a canned team composition without calling LLM."""
-    from unittest.mock import patch, AsyncMock
+    """Patch orchestrator_node to return a canned team composition without calling LLM."""
+    from unittest.mock import patch
     import backend.orchestrator.graph as gmod
 
-    async def fake_plan(state):
+    async def fake_orchestrator(state):
+        history = list(state.get("conversation_history") or [])
+        message = state.get("pending_message") or state["task"]
+        if not history or history[-1].get("content") != message:
+            history.append({"role": "user", "content": message, "ts": 0})
         return {
             "team_composition": {
                 "team": [{"role": "Builder", "model": "claude:sonnet", "count": 1, "passive": False}],
                 "confidence": confidence,
                 "rationale": "mocked",
-            }
+            },
+            "last_response": "Spawning a builder.",
+            "conversation_history": history,
         }
 
-    return patch.object(gmod, "plan_node", fake_plan)
+    return patch.object(gmod, "orchestrator_node", fake_orchestrator)
 
 
 def _patch_planner_high_confidence():

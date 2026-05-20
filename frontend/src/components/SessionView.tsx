@@ -8,6 +8,10 @@ import { ApprovalModal } from './ApprovalModal'
 import { InputSection } from './InputSection'
 import type { WSEvent } from '../types'
 
+async function closeProject(sessionId: string): Promise<void> {
+  await fetch(`/api/sessions/${sessionId}/close`, { method: 'POST' })
+}
+
 interface Props {
   sessionId: string
 }
@@ -57,6 +61,21 @@ export function SessionView({ sessionId }: Props) {
         <div className="flex-1 overflow-hidden">
           <AgentSidebar sessionId={sessionId} agentId={selectedAgentId} />
         </div>
+        {session.status !== 'closed' && session.status !== 'failed' && (
+          <div className="border-t border-gray-800 p-2">
+            <button
+              type="button"
+              onClick={() => {
+                if (confirm('Close this project? The orchestrator and agents will stop.')) {
+                  void closeProject(sessionId)
+                }
+              }}
+              className="w-full px-3 py-2 text-xs rounded bg-red-900/40 hover:bg-red-900/60 text-red-100 border border-red-800"
+            >
+              Close project
+            </button>
+          </div>
+        )}
       </div>
 
       {session.interrupt && <ApprovalModal sessionId={sessionId} />}
