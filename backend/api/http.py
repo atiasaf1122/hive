@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import uuid
 from collections import deque
 from pathlib import Path
@@ -165,6 +166,69 @@ def launch_session(
 
 # ── REST endpoints ───────────────────────────────────────────────────────────
 
+
+_WIN_PATH_RE = re.compile(r"^([A-Za-z]):[\\/](.*)$", re.DOTALL)
+
+
+def _is_wsl() -> bool:
+    """True iff the backend is running inside WSL.
+
+    Microsoft's published heuristic — read /proc/version and look for
+    "Microsoft" or "WSL". Cached at import time would be wrong (tests
+    monkeypatch it), so we read each time; the file is small and on a
+    procfs read path so it's effectively free.
+    """
+    try:
+        return any(
+            tag in Path("/proc/version").read_text(errors="ignore")
+            for tag in ("Microsoft", "microsoft", "WSL")
+        )
+    except OSError:
+        return False
+
+
+def _windows_to_wsl(raw: str) -> str:
+    """Convert a Windows-style absolute path to its /mnt/<drive>/ equivalent.
+
+    Examples:
+      C:\\Users\\foo\\bar  →  /mnt/c/Users/foo/bar
+      C:/Users/foo/bar     →  /mnt/c/Users/foo/bar
+      D:\\projects         →  /mnt/d/projects
+
+    Returns the input unchanged if it doesn't match the Windows-path
+    shape — the caller dispatches to this only after `_WIN_PATH_RE`.
+    """
+    m = _WIN_PATH_RE.match(raw)
+    if not m:
+        return raw
+    drive, rest = m.group(1).lower(), m.group(2)
+    # Normalise the separators inside `rest` to forward slashes.
+    rest = rest.replace("\\", "/")
+    return f"/mnt/{drive}/{rest}".rstrip("/")
+
+
+def _normalize_workspace_path(raw: str) -> Path:
+    """Single funnel for all the path shapes the desktop can hand us.
+
+    Order of operations:
+      1. Strip surrounding whitespace.
+      2. Expand `~` (already POSIX-safe; harmless on Windows-style input).
+      3. If it looks like a Windows absolute path AND we're in WSL,
+         rewrite to /mnt/<drive>/… so the backend can resolve it.
+      4. Return as a `Path` — callers do the .exists() check.
+
+    Windows paths on non-WSL backends are left alone; the .exists()
+    check downstream will reject them with a clear message.
+    """
+    text = raw.strip()
+    # Expanduser BEFORE the Windows-rewrite — the latter only matches
+    # absolute drive paths, never `~/...`.
+    expanded = str(Path(text).expanduser())
+    if _WIN_PATH_RE.match(expanded) and _is_wsl():
+        expanded = _windows_to_wsl(expanded)
+    return Path(expanded)
+
+
 def _resolve_workspace_path(raw: str | None, session_id: str) -> str:
     """Validate user-supplied workspace path, fall back to a session-local dir.
 
@@ -173,6 +237,11 @@ def _resolve_workspace_path(raw: str | None, session_id: str) -> str:
     surfaces as an opaque FileNotFoundError from inside uvloop when we
     later `cd` into it to run `git init`. We catch that here and return a
     clear 400 instead.
+
+    The Tauri shell runs on Windows even when the backend lives in WSL,
+    so its `@tauri-apps/plugin-dialog` folder picker returns Windows
+    paths like ``C:\\Users\\…``. `_normalize_workspace_path` rewrites
+    those into ``/mnt/c/…`` before we check `.exists()`.
     """
     if raw is None or not raw.strip():
         # Treat empty as "use the session-local default" — backwards-
@@ -190,18 +259,27 @@ def _resolve_workspace_path(raw: str | None, session_id: str) -> str:
             detail="project_path is empty — choose a workspace folder.",
         )
 
-    expanded = Path(raw).expanduser()
-    if not expanded.exists():
+    normalised = _normalize_workspace_path(raw)
+    if not normalised.exists():
+        # If the user gave us a Windows path but we're not on WSL, the
+        # rewrite never fired and the existence check is about to fail.
+        # Mention it in the error so the user knows what's up.
+        hint = ""
+        if _WIN_PATH_RE.match(raw.strip()) and not _is_wsl():
+            hint = (
+                " — Windows-style paths are only translated when the "
+                "backend runs inside WSL."
+            )
         raise HTTPException(
             status_code=400,
-            detail=f"project_path does not exist: {expanded}",
+            detail=f"project_path does not exist: {normalised}{hint}",
         )
-    if not expanded.is_dir():
+    if not normalised.is_dir():
         raise HTTPException(
             status_code=400,
-            detail=f"project_path is not a directory: {expanded}",
+            detail=f"project_path is not a directory: {normalised}",
         )
-    return str(expanded)
+    return str(normalised)
 
 
 @router.post("/sessions", response_model=CreateSessionResponse)

@@ -7,11 +7,28 @@ user opening a terminal.
 """
 from __future__ import annotations
 
+import platform
+
 from fastapi import APIRouter
 
+from backend.api import http as _http
 from backend.detection import detect_backends
 
 router = APIRouter(prefix="/api/detect")
+
+
+@router.get("/host")
+async def detect_host() -> dict:
+    """Where is the backend running? Used by the UI to format hints.
+
+    `wsl=True` lets the desktop shell warn that Windows-style paths
+    will be auto-translated (e.g. C:\\Users\\… → /mnt/c/Users/…).
+    """
+    return {
+        "system": platform.system(),
+        "release": platform.release(),
+        "wsl": _http._is_wsl(),
+    }
 
 
 @router.get("/backends")

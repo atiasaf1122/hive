@@ -135,3 +135,119 @@ async def test_worktree_manager_nonexistent_path_raises_value_error(tmp_path) ->
     mgr = WorktreeManager(session_id="sess-ghost", project_path=str(ghost))
     with pytest.raises(ValueError, match="Project path missing"):
         await mgr.ensure_git_repo()
+
+
+# ── Windows-on-WSL path normalisation ──────────────────────────────────────
+
+
+from backend.api.http import (  # noqa: E402  (after-fixture imports for readability)
+    _normalize_workspace_path,
+    _windows_to_wsl,
+)
+
+
+def test_windows_to_wsl_backslash_form() -> None:
+    assert _windows_to_wsl(r"C:\Users\foo\bar") == "/mnt/c/Users/foo/bar"
+
+
+def test_windows_to_wsl_forward_slash_form() -> None:
+    assert _windows_to_wsl("C:/Users/foo/bar") == "/mnt/c/Users/foo/bar"
+
+
+def test_windows_to_wsl_lowercases_drive_letter() -> None:
+    assert _windows_to_wsl(r"D:\projects") == "/mnt/d/projects"
+
+
+def test_windows_to_wsl_passes_non_windows_input_through() -> None:
+    assert _windows_to_wsl("/home/user/projects") == "/home/user/projects"
+
+
+def test_normalize_converts_windows_path_when_wsl(monkeypatch) -> None:
+    monkeypatch.setattr("backend.api.http._is_wsl", lambda: True)
+    assert str(_normalize_workspace_path(r"C:\Users\foo")) == "/mnt/c/Users/foo"
+
+
+def test_normalize_keeps_wsl_path_unchanged(monkeypatch) -> None:
+    monkeypatch.setattr("backend.api.http._is_wsl", lambda: True)
+    assert str(_normalize_workspace_path("/mnt/c/Users/foo")) == "/mnt/c/Users/foo"
+
+
+def test_normalize_keeps_linux_path_unchanged(monkeypatch) -> None:
+    monkeypatch.setattr("backend.api.http._is_wsl", lambda: True)
+    assert str(_normalize_workspace_path("/home/user/projects")) == "/home/user/projects"
+
+
+def test_normalize_leaves_windows_path_unrewritten_on_non_wsl(monkeypatch) -> None:
+    """On a real Linux box (not WSL), a Windows-shaped path is gibberish.
+    We don't rewrite it; the existence check downstream rejects it."""
+    monkeypatch.setattr("backend.api.http._is_wsl", lambda: False)
+    # The expanduser pass-through preserves the raw form on POSIX.
+    out = str(_normalize_workspace_path(r"C:\Users\foo"))
+    assert "/mnt/" not in out
+
+
+def test_session_create_converts_windows_path_when_wsl(
+    tmp_path,
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    """End-to-end: a Windows path goes in, the backend translates it to
+    /mnt/<drive>/… , the file is found, the session is created."""
+    # Build a fake "/mnt/c/Projects/x" → tmp_path tree.
+    mnt_root = tmp_path / "mnt" / "c" / "Projects" / "x"
+    mnt_root.mkdir(parents=True)
+
+    monkeypatch.setattr("backend.api.http._is_wsl", lambda: True)
+
+    # Stub _windows_to_wsl so the C: prefix maps onto our tmp_path. The
+    # production version returns "/mnt/c/Projects/x"; the test version
+    # returns the tmp_path so .exists() is True without touching /mnt/.
+    real_to_wsl = __import__("backend.api.http", fromlist=["_windows_to_wsl"])._windows_to_wsl
+    expected = real_to_wsl(r"C:\Projects\x")
+    assert expected == "/mnt/c/Projects/x"
+
+    monkeypatch.setattr(
+        "backend.api.http._windows_to_wsl",
+        lambda raw: str(mnt_root) if raw.lower().startswith("c:") else raw,
+    )
+
+    resp = client.post(
+        "/api/sessions",
+        json=_payload(project_path=r"C:\Projects\x"),
+    )
+    assert resp.status_code == 200, resp.text
+
+
+def test_session_create_windows_path_on_non_wsl_hints_at_translation(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    """On non-WSL, a Windows path 400s with a clarifying hint."""
+    monkeypatch.setattr("backend.api.http._is_wsl", lambda: False)
+    resp = client.post(
+        "/api/sessions",
+        json=_payload(project_path=r"C:\Users\nope\nada"),
+    )
+    assert resp.status_code == 400
+    detail = resp.json()["detail"].lower()
+    assert "does not exist" in detail
+    assert "wsl" in detail
+
+
+# ── /api/detect/host surface ───────────────────────────────────────────────
+
+
+def test_detect_host_reports_wsl_flag(client: TestClient, monkeypatch) -> None:
+    monkeypatch.setattr("backend.api.http._is_wsl", lambda: True)
+    resp = client.get("/api/detect/host")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["wsl"] is True
+    assert "system" in body
+
+
+def test_detect_host_reports_non_wsl(client: TestClient, monkeypatch) -> None:
+    monkeypatch.setattr("backend.api.http._is_wsl", lambda: False)
+    resp = client.get("/api/detect/host")
+    assert resp.status_code == 200
+    assert resp.json()["wsl"] is False

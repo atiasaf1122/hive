@@ -73,6 +73,10 @@ export function QuickStart({ initialTask = '' }: QuickStartProps) {
   const [error, setError] = useState<string | null>(null)
   const [preflight, setPreflight] = useState<PreflightResponse | null>(null)
   const [ollamaModels, setOllamaModels] = useState<string[]>([])
+  // Backend host info — populated once. When wsl=true and the user
+  // picks a Windows path, we show the auto-translation hint near the
+  // workspace chip so the path looks intentional, not broken.
+  const [backendWsl, setBackendWsl] = useState(false)
 
   const navigate = useNavigate()
   const openTab = useProjectTabs((s) => s.openTab)
@@ -84,7 +88,23 @@ export function QuickStart({ initialTask = '' }: QuickStartProps) {
       .get<{ ollama_reachable: boolean; models: string[] }>('/api/detect/ollama')
       .then((r) => setOllamaModels(r.ollama_reachable ? r.models : []))
       .catch(() => setOllamaModels([]))
+    // And whether the backend is running inside WSL.
+    api
+      .get<{ wsl: boolean }>('/api/detect/host')
+      .then((r) => setBackendWsl(!!r.wsl))
+      .catch(() => setBackendWsl(false))
   }, [])
+
+  // `C:\…` or `C:/…` (case-insensitive). Mirror of `_WIN_PATH_RE` in
+  // backend/api/http.py — keep them in sync.
+  const isWindowsPath = /^[A-Za-z]:[\\/]/.test(workspace.trim())
+  const showWslHint = isWindowsPath && backendWsl
+
+  function toWslPath(raw: string): string {
+    const m = /^([A-Za-z]):[\\/](.*)$/.exec(raw.trim())
+    if (!m) return raw
+    return `/mnt/${m[1].toLowerCase()}/${m[2].replace(/\\/g, '/')}`.replace(/\/$/, '')
+  }
 
   const allModels: ModelOption[] = [
     ...BASE_MODELS,
@@ -237,6 +257,16 @@ export function QuickStart({ initialTask = '' }: QuickStartProps) {
             </button>
           </div>
         </div>
+
+        {showWslHint && (
+          <div className="mt-3 px-3 py-2 rounded-soft bg-sky-500/10 border border-sky-500/30 text-[11px] text-sky-700 dark:text-sky-300 flex items-start gap-2">
+            <IconFolder size={12} strokeWidth={1.75} className="shrink-0 mt-0.5" />
+            <span>
+              Backend runs inside WSL — this path will be translated to{' '}
+              <code className="font-mono">{toWslPath(workspace)}</code>.
+            </span>
+          </div>
+        )}
 
         {orchIsLocal && (
           <div className="mt-3 px-3 py-2 rounded-soft bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-700 dark:text-amber-300 flex items-start gap-2">
