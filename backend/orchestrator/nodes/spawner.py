@@ -28,6 +28,10 @@ class SpawnedAgent:
     worktree_path: str
     passive: bool = False
     branch: str = ""
+    # B1: per-agent brief — each agent runs ITS OWN prompt, not the shared task.
+    subtask: str = ""
+    files_hint: list[str] | None = None
+    max_turns: int | None = None  # None → inherit the session default
 
 
 @dataclass
@@ -92,6 +96,9 @@ async def spawn_agents(
             worktree_path=str(wt_path),
             passive=member.passive,
             branch=branch,
+            subtask=getattr(member, "subtask", ""),
+            files_hint=getattr(member, "files_hint", None),
+            max_turns=getattr(member, "max_turns", None),
         )
 
     results = await asyncio.gather(*[_create_one(m, i) for m, i in all_members])

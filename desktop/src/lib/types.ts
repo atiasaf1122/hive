@@ -45,6 +45,10 @@ export interface TeamMember {
   model: string
   count: number
   passive?: boolean
+  /** B1: each agent's own brief — shown in approval cards. */
+  subtask?: string
+  files_hint?: string[] | null
+  max_turns?: number | null
 }
 
 export interface TeamComposition {

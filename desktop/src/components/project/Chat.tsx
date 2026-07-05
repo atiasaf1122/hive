@@ -153,10 +153,15 @@ function ActivityCard({ team, agents }: { team: TeamComposition; agents: AgentIn
                   <div className="w-3.5 h-3.5 rounded-full border border-ink-faint shrink-0" />
                 )}
                 <span className="text-ink">
-                  {m.role} ×{m.count}
+                  {m.role}{(m.count ?? 1) > 1 ? ` ×${m.count}` : ''}
                 </span>
                 <span className="text-ink-faint text-xs">{m.model}</span>
                 {m.passive && <span className="text-ink-faint text-xs">(passive)</span>}
+                {m.subtask && (
+                  <span className="text-ink-muted text-xs truncate" title={m.subtask}>
+                    — {m.subtask}
+                  </span>
+                )}
               </li>
             )
           })}
@@ -229,9 +234,12 @@ function ApprovalCard({ sessionId, payload }: { sessionId: string; payload: Inte
             <ul className="space-y-1 mb-3">
               {comp.team.map((m, i) => (
                 <li key={i} className="text-sm text-ink">
-                  • {m.role} ×{m.count}{' '}
+                  • {m.role}{(m.count ?? 1) > 1 ? ` ×${m.count}` : ''}{' '}
                   <span className="text-ink-faint">[{m.model}]</span>
                   {m.passive && <span className="text-ink-faint"> (passive)</span>}
+                  {m.subtask && (
+                    <div className="text-xs text-ink-muted pl-3">{m.subtask}</div>
+                  )}
                 </li>
               ))}
             </ul>

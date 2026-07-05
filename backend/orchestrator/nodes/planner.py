@@ -33,22 +33,26 @@ Look at the conversation history and the latest user message, then decide what t
 
 Return ONLY a JSON object — no explanation, no markdown.
 
-Available roles:
-- Thinker: architecture planning. model: claude:sonnet
-- Builder: writing code. model: claude:sonnet (can spawn multiple)
-- Tester: writing and running tests. model: claude:sonnet
-- Debugger: fixing failures (passive). model: claude:sonnet
-- Researcher: gathering information. model: claude:sonnet
-- Writer: creating written content. model: claude:sonnet
-- Editor: editing/proofreading. model: claude:sonnet
-- Translator: translation. model: claude:sonnet
-- DocReader: reading long documents. model: claude:sonnet
+Available roles: Thinker (architecture), Builder (code), Tester (tests),
+Debugger (fixing failures — passive only), Researcher, Writer, Editor,
+Translator, DocReader.
+
+Model tiers per agent:
+- "claude:sonnet" — default for real engineering work
+- "claude:haiku"  — mechanical subtasks only (renames, boilerplate, doc tweaks)
 
 Return this exact JSON structure:
 {
   "response": "your direct reply to the user (always present, can be brief)",
   "team": [
-    {"role": "Builder", "model": "claude:sonnet", "count": 1, "passive": false}
+    {
+      "role": "Builder",
+      "model": "claude:sonnet",
+      "subtask": "Implement the Flask routes in app.py — CRUD for /todos. Do NOT write tests (a Tester agent owns those).",
+      "files_hint": ["app.py"],
+      "max_turns": 15,
+      "passive": false
+    }
   ],
   "confidence": 0.8,
   "rationale": "one line reason"
@@ -56,20 +60,53 @@ Return this exact JSON structure:
 
 Rules:
 - If the user is just chatting / asking a question / following up → set `team: []` and put your answer in `response`.
-- If the user wants something built/edited/fixed → list 1-5 active agents in `team` and put a short acknowledgement in `response`.
+- If the user wants something built/edited/fixed → list 1-5 agents in `team`, ONE ENTRY PER AGENT.
+- EVERY agent gets its own `subtask`: a concrete, self-contained brief. Parallel agents are only
+  worth spawning when you can DECOMPOSE the work into distinct subtasks — never emit two agents
+  with the same brief just to "go faster"; that duplicates the work and wastes tokens.
+  The one exception is deliberate perspective diversity (e.g. investigating a bug from several
+  angles): then give each agent the same question but a DISTINCT lens, stated in its subtask.
+- `files_hint`: files/dirs this agent will touch. Two agents must NOT list the same file — if
+  they would, merge them into one agent, sequence the work across turns, or make one a reviewer
+  of the other's output.
+- `max_turns`: per-agent budget — 5-8 for small/mechanical subtasks, 15 standard, 25 only for
+  large builds.
 - passive=true for Debugger only.
 - No markdown, no extra text outside the JSON."""
 
 
 class TeamMember:
-    def __init__(self, role: str, model: str, count: int, passive: bool = False) -> None:
+    """One agent slot in a team plan.
+
+    `subtask` is the agent's own brief (B1: per-agent decomposition). `count`
+    survives for backwards compatibility with old checkpoints/tests — the
+    parser expands count>1 into individual members, so downstream code can
+    treat every TeamMember as exactly one agent.
+    """
+
+    def __init__(
+        self,
+        role: str,
+        model: str,
+        count: int = 1,
+        passive: bool = False,
+        subtask: str = "",
+        files_hint: list[str] | None = None,
+        max_turns: int | None = None,
+    ) -> None:
         self.role = role
         self.model = model
         self.count = count
         self.passive = passive
+        self.subtask = subtask
+        self.files_hint = files_hint
+        self.max_turns = max_turns
 
     def __repr__(self) -> str:
-        return f"TeamMember(role={self.role}, model={self.model}, count={self.count}, passive={self.passive})"
+        return (
+            f"TeamMember(role={self.role}, model={self.model}, count={self.count}, "
+            f"passive={self.passive}, subtask={self.subtask[:40]!r})"
+        )
 
 
 class TeamComposition:
@@ -253,7 +290,7 @@ def _parse_team_composition(raw: str) -> TeamComposition:
     if composition.total_active == 0:
         logger.warning("Planner returned 0 active agents -- inserting default Builder")
         composition.team.append(
-            TeamMember(role="Builder", model="claude:sonnet", count=1, passive=False)
+            TeamMember(role="Builder", model=DEFAULT_MODEL, count=1, passive=False)
         )
         if not composition.rationale:
             composition.rationale = "auto-added default Builder (planner returned no active agents)"
@@ -266,14 +303,27 @@ def _parse_composition_dict(data: dict) -> TeamComposition:
 
     The orchestrator path needs an empty team to be a legitimate signal that
     "no agents needed, just answer". So we keep raw zero-active teams intact.
+
+    Legacy `count` fields (old checkpoints, pre-B1 plans) are expanded into
+    individual members here so downstream code never sees count>1.
     """
     team = []
     for member in data.get("team", []):
         role = member.get("role", "Builder")
-        model = member.get("model", "claude:sonnet")
+        model = member.get("model", DEFAULT_MODEL)
         count = max(1, int(member.get("count", 1)))
         passive = bool(member.get("passive", False))
-        team.append(TeamMember(role=role, model=model, count=count, passive=passive))
+        subtask = (member.get("subtask") or "").strip()
+        files_hint = member.get("files_hint") or None
+        if files_hint is not None:
+            files_hint = [str(f) for f in files_hint if str(f).strip()] or None
+        raw_turns = member.get("max_turns")
+        max_turns = max(1, min(int(raw_turns), 50)) if raw_turns else None
+        for _ in range(count):
+            team.append(TeamMember(
+                role=role, model=model, count=1, passive=passive,
+                subtask=subtask, files_hint=files_hint, max_turns=max_turns,
+            ))
 
     return TeamComposition(
         team=team,
@@ -314,7 +364,7 @@ def _fallback_team() -> TeamComposition:
     see the gate (mode is the primary signal, confidence is secondary).
     """
     return TeamComposition(
-        team=[TeamMember(role="Builder", model="claude:sonnet", count=1)],
+        team=[TeamMember(role="Builder", model=DEFAULT_MODEL, count=1)],
         confidence=0.75,
         rationale="fallback: planning failed, using single Builder",
     )

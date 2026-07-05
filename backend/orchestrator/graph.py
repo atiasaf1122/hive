@@ -110,7 +110,11 @@ async def orchestrator_node(state: GraphState) -> dict:
 
     composition_dict = {
         "team": [
-            {"role": m.role, "model": m.model, "count": m.count, "passive": m.passive}
+            {
+                "role": m.role, "model": m.model, "count": m.count,
+                "passive": m.passive, "subtask": m.subtask,
+                "files_hint": m.files_hint, "max_turns": m.max_turns,
+            }
             for m in decision.composition.team
         ],
         "confidence": decision.composition.confidence,
@@ -302,8 +306,35 @@ async def spawn_node(state: GraphState) -> dict:
     return {"spawn_plan": plan_dict}
 
 
+def _build_agent_prompt(agent: SpawnedAgent, goal: str, pending: str) -> str:
+    """Compose one agent's OWN prompt from its brief (B1).
+
+    Before B1 every agent received the identical `[role] task` prompt — three
+    Builders did the same work three times. Now each agent gets the project
+    goal for context plus its specific subtask. When the planner didn't emit
+    a subtask (legacy plans, fallback team) the current request IS the
+    subtask, preserving old behaviour for single-agent teams.
+    """
+    parts = [f"You are the {agent.role} agent in a HIVE multi-agent team."]
+    parts.append(f"## Project goal (context)\n{goal}")
+    if pending and pending.strip() != goal.strip():
+        parts.append(f"## Current request\n{pending}")
+    parts.append(f"## Your subtask\n{agent.subtask or pending}")
+    if agent.files_hint:
+        parts.append("## Files in your scope\n" + "\n".join(f"- {f}" for f in agent.files_hint))
+    parts.append(
+        "Stay strictly within your subtask — other agents own the rest of the "
+        "work, and duplicating it creates merge conflicts. Commit nothing "
+        "yourself; HIVE auto-commits your worktree when you finish."
+    )
+    return "\n\n".join(parts)
+
+
 async def run_workers_node(state: GraphState) -> dict:
-    """Run all active agents in parallel (up to MAX_CONCURRENT at a time)."""
+    """Run all active agents in parallel (up to MAX_CONCURRENT at a time).
+
+    Each agent receives its own subtask prompt and per-agent max_turns (B1).
+    """
     plan_dict = state.get("spawn_plan") or {}
     active = [_dict_to_agent(a) for a in plan_dict.get("active_agents", [])]
     if not active:
@@ -313,14 +344,17 @@ async def run_workers_node(state: GraphState) -> dict:
         return {"worker_results": {}}
 
     pending = state.get("pending_message") or state["task"]
+    goal = state["task"]
     session_id = state["session_id"]
-    max_turns = state.get("max_turns", 20)
+    default_max_turns = state.get("max_turns", 20)
 
     semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 
     async def _run_one(agent: SpawnedAgent) -> tuple[str, AgentResult]:
+        prompt = _build_agent_prompt(agent, goal=goal, pending=pending)
+        max_turns = agent.max_turns or default_max_turns
         async with semaphore:
-            return agent.agent_id, await _execute_worker(agent, pending, session_id, max_turns)
+            return agent.agent_id, await _execute_worker(agent, prompt, session_id, max_turns)
 
     pairs = await asyncio.gather(*[_run_one(a) for a in active])
     return {"worker_results": {aid: res for aid, res in pairs}}
@@ -715,7 +749,7 @@ async def _ensure_worktree_identity(worktree_path: str) -> None:
 
 async def _execute_worker(
     agent: SpawnedAgent,
-    task: str,
+    prompt: str,
     session_id: str,
     max_turns: int,
 ) -> AgentResult:
@@ -748,11 +782,12 @@ async def _execute_worker(
             input_tokens=0, output_tokens=0, cost_usd=0.0, error=msg,
         )
 
-    role_task = f"[{agent.role}] {task}"
-
+    # Skill retrieval keys off the agent's own brief — the subtask is a far
+    # sharper query than the shared session task ever was.
+    skill_query = f"[{agent.role}] {agent.subtask or prompt[:300]}"
     skill_context = ""
     try:
-        relevant = await search_skills(role_task, top_k=3)
+        relevant = await search_skills(skill_query, top_k=3)
         skill_context = build_skill_context(relevant)
         if relevant:
             logger.info("Injecting %d skill(s) for agent %s", len(relevant), agent.agent_id)
@@ -777,7 +812,7 @@ async def _execute_worker(
     )
 
     try:
-        async for event in worker.run(role_task, config):
+        async for event in worker.run(prompt, config):
             try:
                 await write_event(event)
             except Exception as exc:
@@ -861,6 +896,7 @@ def _agent_to_dict(a: SpawnedAgent) -> dict:
     return {
         "agent_id": a.agent_id, "role": a.role, "model": a.model,
         "worktree_path": a.worktree_path, "passive": a.passive, "branch": a.branch,
+        "subtask": a.subtask, "files_hint": a.files_hint, "max_turns": a.max_turns,
     }
 
 
@@ -869,4 +905,6 @@ def _dict_to_agent(d: dict) -> SpawnedAgent:
         agent_id=d["agent_id"], role=d["role"], model=d["model"],
         worktree_path=d["worktree_path"], passive=d.get("passive", False),
         branch=d.get("branch", ""),
+        subtask=d.get("subtask", ""), files_hint=d.get("files_hint"),
+        max_turns=d.get("max_turns"),
     )

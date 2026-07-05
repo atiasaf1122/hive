@@ -35,9 +35,12 @@ def test_parse_valid_team_composition():
         "rationale": "standard dev team",
     })
     comp = _parse_team_composition(raw)
-    assert len(comp.team) == 3
+    # B1: legacy count>1 entries expand into individual members —
+    # Thinker(1) + Builder(2) + Debugger(1) = 4 members, all count=1.
+    assert len(comp.team) == 4
+    assert all(m.count == 1 for m in comp.team)
     assert comp.confidence == 0.9
-    assert comp.team[2].passive is True
+    assert comp.team[3].passive is True
     assert comp.total_active == 3  # Thinker(1) + Builder(2)
 
 

@@ -42,6 +42,7 @@ def test_planner_leaves_valid_team_unchanged() -> None:
         "rationale": "good team",
     })
     comp = _parse_team_composition(raw)
-    assert len(comp.team) == 1
-    assert comp.team[0].count == 2
+    # B1: count=2 expands to two single-agent members.
+    assert len(comp.team) == 2
+    assert all(m.count == 1 for m in comp.team)
     assert comp.rationale == "good team"
