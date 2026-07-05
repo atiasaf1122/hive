@@ -60,6 +60,20 @@ async def parse_stream(
                 "Stream parser: no output for %d ms — abandoning read.",
                 IDLE_TIMEOUT_MS,
             )
+            # Surface the stall as a failure. Previously this path silently
+            # `return`ed, so a hung claude process ended the stream as if it
+            # had finished and the turn falsely completed. The worker layer
+            # recognises this error, kills the hung process, and skips its
+            # own AGENT_END/exit-code handling.
+            yield HiveEvent(
+                type=EventType.AGENT_ERROR,
+                agent_id=config.agent_id,
+                session_id=config.session_id,
+                error=(
+                    f"worker idle-timeout after {IDLE_TIMEOUT_MS / 1000:.0f}s "
+                    "— no output from claude CLI"
+                ),
+            )
             return
         if not chunk:
             # EOF — flush any complete lines left in the buffer before we

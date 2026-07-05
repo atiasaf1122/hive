@@ -134,3 +134,37 @@ async def test_agent_ids_set_on_all_events():
     for e in events:
         assert e.agent_id == config.agent_id
         assert e.session_id == config.session_id
+
+
+@pytest.mark.asyncio
+async def test_idle_timeout_kills_process_and_skips_agent_end(monkeypatch):
+    """On stall the worker must kill the hung process group and must NOT
+    emit AGENT_END — the stall is a failure, and `await proc.wait()` on a
+    hung process would block forever."""
+    from backend.workers import stream_parser as sp
+
+    monkeypatch.setattr(sp, "IDLE_TIMEOUT_MS", 50)
+
+    reader = asyncio.StreamReader()  # never feeds data, never EOFs
+    mock_proc = MagicMock()
+    mock_proc.stdout = reader
+    mock_proc.stderr = asyncio.StreamReader()
+    mock_proc.pid = 4242
+
+    async def _wait():
+        return 0
+
+    mock_proc.wait = _wait
+
+    killed: list[tuple[int, int]] = []
+    with patch("asyncio.create_subprocess_exec", return_value=mock_proc), \
+         patch("os.getpgid", return_value=999), \
+         patch("os.killpg", side_effect=lambda pgid, sig: killed.append((pgid, sig))):
+        worker = ClaudeCLIWorker(oauth_token="test-token")
+        events = [e async for e in worker.run("hello", _make_config())]
+
+    types = [e.type for e in events]
+    assert EventType.AGENT_ERROR in types
+    assert EventType.AGENT_END not in types
+    assert any("idle-timeout" in (e.error or "") for e in events)
+    assert killed, "hung process group was not killed"

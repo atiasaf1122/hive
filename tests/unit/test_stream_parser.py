@@ -197,3 +197,36 @@ async def test_partial_chunks_buffered_correctly():
     events = await _collect(reader, _make_config())
     assert len(events) == 1
     assert events[0].type == EventType.AGENT_START
+
+
+@pytest.mark.asyncio
+async def test_idle_timeout_yields_agent_error(monkeypatch):
+    """A stream that goes silent must surface AGENT_ERROR, not end quietly —
+    the pre-Phase-A behavior let a hung claude process falsely complete."""
+    from backend.workers import stream_parser as sp
+
+    monkeypatch.setattr(sp, "IDLE_TIMEOUT_MS", 50)
+
+    reader = asyncio.StreamReader()  # no data, no EOF — a hang
+    events = [e async for e in sp.parse_stream(reader, _make_config())]
+
+    assert len(events) == 1
+    assert events[0].type == EventType.AGENT_ERROR
+    assert "idle-timeout" in events[0].error
+
+
+@pytest.mark.asyncio
+async def test_idle_timeout_after_partial_output(monkeypatch):
+    """Events received before the silence are still delivered, then the
+    stall error follows."""
+    from backend.workers import stream_parser as sp
+
+    monkeypatch.setattr(sp, "IDLE_TIMEOUT_MS", 50)
+
+    reader = asyncio.StreamReader()
+    reader.feed_data(json.dumps({"type": "system", "subtype": "init"}).encode() + b"\n")
+    # no feed_eof — the process hangs after init
+
+    events = [e async for e in sp.parse_stream(reader, _make_config())]
+    assert [e.type for e in events] == [EventType.AGENT_START, EventType.AGENT_ERROR]
+    assert "idle-timeout" in events[-1].error

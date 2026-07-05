@@ -19,9 +19,6 @@ from backend.workers.stream_parser import parse_stream
 
 logger = logging.getLogger(__name__)
 
-# Idle timeout: if the stream produces no data for this long, fail fast.
-_IDLE_TIMEOUT_S = float(os.environ.get("CLAUDE_STREAM_IDLE_TIMEOUT_MS", "600000")) / 1000
-
 
 class ClaudeCLIWorker:
     """Worker implementation that delegates to the `claude` CLI subprocess.
@@ -105,6 +102,7 @@ class ClaudeCLIWorker:
         pgid = os.getpgid(proc.pid)
         self._processes[config.agent_id] = (proc, pgid)
 
+        stalled = False
         try:
             async for event in parse_stream(proc.stdout, config):  # type: ignore[arg-type]
                 # Stamp the subprocess PID onto the start event so the
@@ -112,6 +110,8 @@ class ClaudeCLIWorker:
                 # it to tell a live agent from a crashed one after restart.
                 if event.type == EventType.AGENT_START and event.pid is None:
                     event.pid = proc.pid
+                if event.type == EventType.AGENT_ERROR and "idle-timeout" in (event.error or ""):
+                    stalled = True
                 yield event
 
                 # If the stream signals a rate limit, wait before next read.
@@ -121,6 +121,17 @@ class ClaudeCLIWorker:
                         "Rate limit hit for agent=%s — waiting %.1fs", config.agent_id, wait_s
                     )
                     await asyncio.sleep(wait_s)
+
+            if stalled:
+                # The process is hung, not finished — `await proc.wait()`
+                # would block forever. Kill the whole process group; the
+                # parser already yielded the AGENT_ERROR, so no AGENT_END.
+                logger.error(
+                    "claude CLI stalled (idle-timeout) | agent=%s — killing process group",
+                    config.agent_id,
+                )
+                await self.kill(config.agent_id)
+                return
 
             await proc.wait()
             exit_code = proc.returncode
