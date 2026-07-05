@@ -794,6 +794,17 @@ async def _execute_worker(
     except Exception as exc:
         logger.debug("Skill search skipped: %s", exc)
 
+    # B2: mint or reuse this logical agent's claude conversation uuid so a
+    # re-spawned agent resumes with its context instead of starting amnesiac.
+    claude_session_id: str | None = None
+    resume_claude = False
+    if agent.model.startswith("claude:"):
+        try:
+            from backend.persistence.events import get_or_create_claude_session
+            claude_session_id, resume_claude = await get_or_create_claude_session(agent.agent_id)
+        except Exception as exc:
+            logger.warning("claude session lookup failed for %s: %s", agent.agent_id, exc)
+
     worker = ClaudeCLIWorker() if agent.model.startswith("claude:") else OllamaWorker()
     config = WorkerConfig(
         agent_id=agent.agent_id,
@@ -802,6 +813,8 @@ async def _execute_worker(
         worktree_path=agent.worktree_path,
         max_turns=max_turns,
         system_prompt=skill_context,
+        claude_session_id=claude_session_id,
+        resume_claude_session=resume_claude,
     )
 
     text_parts: list[str] = []

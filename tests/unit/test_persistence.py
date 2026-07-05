@@ -196,3 +196,41 @@ async def test_delete_session_data_leaves_other_sessions(tmp_db):
 
     assert await get_session("keep", db_path=tmp_db) is not None
     assert await get_session("drop", db_path=tmp_db) is None
+
+
+# ── claude session uuid persistence (B2) ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_claude_session_uuid_minted_then_reused(tmp_db):
+    from backend.persistence.events import get_or_create_claude_session
+
+    await create_session("s-b2", db_path=tmp_db)
+    await create_agent("builder-s-b2-0", "s-b2", role="Builder",
+                       model="claude:sonnet", worktree_path="/tmp/b2", db_path=tmp_db)
+
+    first, resumed_1 = await get_or_create_claude_session("builder-s-b2-0", db_path=tmp_db)
+    second, resumed_2 = await get_or_create_claude_session("builder-s-b2-0", db_path=tmp_db)
+
+    assert resumed_1 is False           # first spawn names the conversation
+    assert resumed_2 is True            # re-spawn resumes it
+    assert first == second
+    import uuid as _uuid
+    _uuid.UUID(first)                   # valid uuid format for the claude CLI
+
+
+@pytest.mark.asyncio
+async def test_claude_session_uuid_survives_restart(tmp_db):
+    """Fresh connection to the same DB (simulated restart) sees the uuid."""
+    from backend.persistence.events import get_or_create_claude_session
+
+    await create_session("s-b2r", db_path=tmp_db)
+    await create_agent("tester-s-b2r-0", "s-b2r", role="Tester",
+                       model="claude:sonnet", worktree_path="/tmp/b2r", db_path=tmp_db)
+    minted, _ = await get_or_create_claude_session("tester-s-b2r-0", db_path=tmp_db)
+
+    # Every get_conn() call opens a fresh connection, so this read IS the
+    # restart case: no shared in-memory state, only the DB row.
+    again, resumed = await get_or_create_claude_session("tester-s-b2r-0", db_path=tmp_db)
+    assert again == minted
+    assert resumed is True

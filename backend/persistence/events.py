@@ -115,6 +115,36 @@ async def update_agent_status(
         await conn.commit()
 
 
+async def get_or_create_claude_session(
+    agent_id: str, db_path: Path = DB_PATH
+) -> tuple[str, bool]:
+    """Return (claude_session_uuid, resumed) for a logical agent.
+
+    Agent ids are stable across turns within a HIVE session
+    (`{role}-{session[:6]}-{index}`), so the first spawn mints a uuid the
+    worker passes as `--session-id`, and every later spawn of the same
+    logical agent gets (same uuid, resumed=True) → `--resume` keeps its
+    conversation context instead of re-exploring the project. Persisted in
+    agents.claude_session_id, so it survives backend restarts.
+    """
+    import uuid as _uuid
+
+    async with get_conn(db_path) as conn:
+        cursor = await conn.execute(
+            "SELECT claude_session_id FROM agents WHERE id=?", (agent_id,)
+        )
+        row = await cursor.fetchone()
+        if row is not None and row["claude_session_id"]:
+            return row["claude_session_id"], True
+
+        new_id = str(_uuid.uuid4())
+        await conn.execute(
+            "UPDATE agents SET claude_session_id=? WHERE id=?", (new_id, agent_id)
+        )
+        await conn.commit()
+        return new_id, False
+
+
 async def write_cost(
     session_id: str,
     agent_id: str,

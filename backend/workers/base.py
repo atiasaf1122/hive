@@ -90,6 +90,12 @@ class WorkerConfig(BaseModel):
     # default claude CLI tool set applies. Empty list disables tools
     # entirely. Threaded into `--allowed-tools` on ClaudeCLIWorker.
     allowed_tools: list[str] | None = None
+    # B2: claude CLI conversation identity. When set, the first spawn passes
+    # `--session-id <uuid>`; re-spawns of the same logical agent pass
+    # `--resume <uuid>` so the agent keeps its conversation context across
+    # turns instead of re-exploring the project. Ignored by OllamaWorker.
+    claude_session_id: str | None = None
+    resume_claude_session: bool = False
 
 
 @runtime_checkable

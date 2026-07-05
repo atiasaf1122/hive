@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS agents (
     status          TEXT NOT NULL DEFAULT 'active',  -- 'active' | 'completed' | 'failed' | 'crashed'
     worktree_path   TEXT NOT NULL DEFAULT '',
     pid             INTEGER,
+    claude_session_id TEXT,        -- claude CLI conversation uuid (B2: --session-id/--resume)
     started_at      TEXT NOT NULL DEFAULT (datetime('now')),
     ended_at        TEXT
 );
@@ -154,11 +155,38 @@ def ensure_hive_dir() -> Path:
     return HIVE_DIR
 
 
+# Column additions for DBs created before the column existed in _SCHEMA.
+# CREATE TABLE IF NOT EXISTS won't touch an existing table, so each entry
+# here is ALTERed in; "duplicate column" errors mean it's already applied.
+_COLUMN_MIGRATIONS = [
+    "ALTER TABLE agents ADD COLUMN claude_session_id TEXT",
+]
+
+
+def _apply_column_migrations_sync(conn: sqlite3.Connection) -> None:
+    for stmt in _COLUMN_MIGRATIONS:
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
+
+
+async def _apply_column_migrations(conn: aiosqlite.Connection) -> None:
+    for stmt in _COLUMN_MIGRATIONS:
+        try:
+            await conn.execute(stmt)
+        except aiosqlite.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
+
+
 async def init_db(path: Path = DB_PATH) -> None:
     """Create DB file and apply schema. Safe to call multiple times."""
     ensure_hive_dir()
     async with aiosqlite.connect(path) as conn:
         await conn.executescript(_SCHEMA)
+        await _apply_column_migrations(conn)
         await conn.commit()
 
 
@@ -177,5 +205,6 @@ def init_db_sync(path: Path = DB_PATH) -> None:
     ensure_hive_dir()
     conn = sqlite3.connect(path)
     conn.executescript(_SCHEMA)
+    _apply_column_migrations_sync(conn)
     conn.commit()
     conn.close()

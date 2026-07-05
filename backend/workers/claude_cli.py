@@ -63,6 +63,15 @@ class ClaudeCLIWorker:
             # never pins dated IDs. See backend/models.py.
             cmd += ["--model", resolve_cli_model(model_name)]
 
+        # B2: conversation continuity. First spawn names the conversation
+        # (--session-id); re-spawns of the same logical agent resume it
+        # (--resume) so context carries across turns / capability re-spawns.
+        if config.claude_session_id:
+            if config.resume_claude_session:
+                cmd += ["--resume", config.claude_session_id]
+            else:
+                cmd += ["--session-id", config.claude_session_id]
+
         # Allowed-tools whitelist — used by the planner to enforce
         # read-only access (it kept silently writing files in /tmp
         # instead of just deciding the team composition). When set

@@ -168,3 +168,51 @@ async def test_idle_timeout_kills_process_and_skips_agent_end(monkeypatch):
     assert EventType.AGENT_END not in types
     assert any("idle-timeout" in (e.error or "") for e in events)
     assert killed, "hung process group was not killed"
+
+
+@pytest.mark.asyncio
+async def test_first_spawn_passes_session_id():
+    """B2: a fresh conversation is named with --session-id."""
+    proc = _build_mock_process({"type": "system", "subtype": "init"})
+    captured: dict = {}
+
+    async def fake_exec(*cmd, **kw):
+        captured["cmd"] = list(cmd)
+        return proc
+
+    cfg = _make_config()
+    cfg.claude_session_id = "11111111-2222-3333-4444-555555555555"
+    cfg.resume_claude_session = False
+    with patch("asyncio.create_subprocess_exec", side_effect=fake_exec), \
+         patch("os.getpgid", return_value=1):
+        worker = ClaudeCLIWorker(oauth_token="test-token")
+        [e async for e in worker.run("hello", cfg)]
+
+    cmd = captured["cmd"]
+    assert "--session-id" in cmd
+    assert cmd[cmd.index("--session-id") + 1] == cfg.claude_session_id
+    assert "--resume" not in cmd
+
+
+@pytest.mark.asyncio
+async def test_respawn_passes_resume_with_same_uuid():
+    """B2: a re-spawned logical agent resumes its conversation."""
+    proc = _build_mock_process({"type": "system", "subtype": "init"})
+    captured: dict = {}
+
+    async def fake_exec(*cmd, **kw):
+        captured["cmd"] = list(cmd)
+        return proc
+
+    cfg = _make_config()
+    cfg.claude_session_id = "11111111-2222-3333-4444-555555555555"
+    cfg.resume_claude_session = True
+    with patch("asyncio.create_subprocess_exec", side_effect=fake_exec), \
+         patch("os.getpgid", return_value=1):
+        worker = ClaudeCLIWorker(oauth_token="test-token")
+        [e async for e in worker.run("hello", cfg)]
+
+    cmd = captured["cmd"]
+    assert "--resume" in cmd
+    assert cmd[cmd.index("--resume") + 1] == cfg.claude_session_id
+    assert "--session-id" not in cmd
