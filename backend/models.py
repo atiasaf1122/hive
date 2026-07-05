@@ -22,6 +22,9 @@ MODEL_TIERS: dict[str, str] = {
 # strong models only where the task warrants it — see CLAUDE.md invariant 7).
 DEFAULT_MODEL = "claude:sonnet"
 HAIKU_MODEL = "claude:haiku"
+# Reserved for the rare, high-value escalations (reviewer on merge conflict
+# or validation failure; future META runs) — never a default worker tier.
+OPUS_MODEL = "claude:opus"
 
 # Retired shorthand spellings from the pre-registry map. The bare tier
 # alias is what the claude CLI understands.

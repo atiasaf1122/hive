@@ -165,3 +165,109 @@ async def test_review_history_uses_summary_not_raw_output() -> None:
     assert "Compact: built the API." in final
     assert raw not in final
     assert len(final) < 2000
+
+
+# ── B6: LLM review only on conflict / validation failure ───────────────────
+
+
+def _review_state(results: dict) -> dict:
+    return {
+        "session_id": "sess-b6",
+        "spawn_plan": {
+            "session_id": "sess-b6", "project_path": "/tmp/p",
+            "active_agents": [], "passive_agents": [],
+        },
+        "worker_results": results,
+        "conversation_history": [],
+        "last_response": "",
+    }
+
+
+def _ok_result(aid: str, **kw) -> dict:
+    base = {"agent_id": aid, "status": "completed", "text_output": "done",
+            "summary": "did it", "input_tokens": 0, "output_tokens": 0,
+            "cost_usd": 0.0, "error": None, "validation_passed": True,
+            "validation_findings": []}
+    base.update(kw)
+    return base
+
+
+def _fake_report(conflicts: list | None = None):
+    from backend.orchestrator.nodes.reviewer import ReviewReport
+    r = ReviewReport(session_id="sess-b6")
+    r.conflicts = conflicts or []
+    return r
+
+
+@pytest.mark.asyncio
+async def test_clean_merge_skips_llm_review() -> None:
+    with patch("backend.orchestrator.graph.review_and_merge",
+               new_callable=AsyncMock, return_value=_fake_report()), \
+         patch("backend.orchestrator.graph.llm_review",
+               new_callable=AsyncMock) as llm, \
+         patch("backend.orchestrator.graph._emit_to_ws", new_callable=AsyncMock):
+        await review_node(_review_state({"a1": _ok_result("a1")}))  # type: ignore[arg-type]
+    llm.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_merge_conflict_triggers_llm_review() -> None:
+    from backend.worktrees.manager import MergeResult
+
+    conflict = MergeResult(success=False, agent_id="a1",
+                           branch="hive/s/a1", commits_merged=0,
+                           conflict_files=["app.py"])
+    with patch("backend.orchestrator.graph.review_and_merge",
+               new_callable=AsyncMock, return_value=_fake_report([conflict])), \
+         patch("backend.orchestrator.graph.llm_review",
+               new_callable=AsyncMock, return_value=["LLM review: resolved"]) as llm, \
+         patch("backend.orchestrator.graph._emit_to_ws", new_callable=AsyncMock):
+        out = await review_node(_review_state({"a1": _ok_result("a1")}))  # type: ignore[arg-type]
+    llm.assert_awaited_once()
+    assert any("LLM review" in n for n in out["review_report"]["notes"])
+
+
+@pytest.mark.asyncio
+async def test_validation_failure_triggers_llm_review() -> None:
+    results = {"a1": _ok_result("a1", validation_passed=False,
+                                validation_findings=["claims file that doesn't exist"])}
+    with patch("backend.orchestrator.graph.review_and_merge",
+               new_callable=AsyncMock, return_value=_fake_report()), \
+         patch("backend.orchestrator.graph.llm_review",
+               new_callable=AsyncMock, return_value=["LLM review: checked"]) as llm, \
+         patch("backend.orchestrator.graph._emit_to_ws", new_callable=AsyncMock):
+        await review_node(_review_state(results))  # type: ignore[arg-type]
+    llm.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_llm_review_runs_opus_and_returns_notes() -> None:
+    """The escalation pass itself: opus tier, notes come back."""
+    from backend.orchestrator.nodes import reviewer as rmod
+    from backend.orchestrator.nodes.spawner import SpawnPlan
+    from backend.worktrees.manager import MergeResult
+
+    captured: dict = {}
+
+    class _FakeReviewWorker:
+        def __init__(self, *a, **kw): ...
+
+        async def run(self, prompt, config):
+            captured["model"] = config.model
+            captured["prompt"] = prompt
+            yield HiveEvent(type=EventType.TEXT_DONE, agent_id=config.agent_id,
+                            session_id=config.session_id, text="Merged a1; all good.")
+
+        async def kill(self, agent_id): ...
+
+    plan = SpawnPlan(session_id="s", project_path="/tmp/p")
+    report = _fake_report([MergeResult(success=False, agent_id="a1",
+                                       branch="hive/s/a1", commits_merged=0,
+                                       conflict_files=["app.py"])])
+    with patch.object(rmod, "ClaudeCLIWorker", _FakeReviewWorker, create=True), \
+         patch("backend.workers.claude_cli.ClaudeCLIWorker", _FakeReviewWorker):
+        notes = await rmod.llm_review(plan, report, {})
+
+    assert captured["model"] == "claude:opus"
+    assert "app.py" in captured["prompt"]
+    assert notes and "Merged a1" in notes[0]

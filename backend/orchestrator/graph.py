@@ -34,7 +34,7 @@ from backend.orchestrator.nodes.planner import (
     _parse_team_composition,
     orchestrate,
 )
-from backend.orchestrator.nodes.reviewer import ReviewReport, review_and_merge, summarize_results
+from backend.orchestrator.nodes.reviewer import ReviewReport, llm_review, review_and_merge
 from backend.orchestrator.nodes.spawner import SpawnPlan, SpawnedAgent, spawn_agents
 from backend.orchestrator.state import AgentResult, GraphState
 from backend.persistence.db import DB_PATH
@@ -385,6 +385,22 @@ async def review_node(state: GraphState) -> dict:
     )
 
     report = await review_and_merge(plan=plan, results=results)
+
+    # B6: LLM escalation — ONLY when the mechanical pass hit a merge
+    # conflict or a worker failed validation. Clean merges (the common
+    # case) never pay for an Opus call.
+    any_validation_failed = any(
+        r.get("validation_passed") is False for r in results.values()
+    )
+    if report.conflicts or any_validation_failed:
+        await _emit_to_ws(state["session_id"], {
+            "type": "llm_review_started",
+            "session_id": state["session_id"],
+            "conflicts": len(report.conflicts),
+            "validation_failures": any_validation_failed,
+        })
+        notes = await llm_review(plan=plan, report=report, results=results)
+        report.notes.extend(notes)
 
     total_in = sum(r["input_tokens"] for r in results.values())
     total_out = sum(r["output_tokens"] for r in results.values())
