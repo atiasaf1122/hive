@@ -53,14 +53,16 @@ CATALOG: dict[str, MCPServerSpec] = {
             id="playwright",
             label="Playwright (browser + vision)",
             command="npx",
-            # --isolated: in-memory profile per instance; --headless: never
-            # pop windows on the host. Parallel agents sharing a browser
-            # profile corrupt each other's sessions — isolation is
-            # non-negotiable, hence per_agent_isolation=True.
+            # --isolated: each server instance gets its own in-memory
+            # browser profile — that IS the per-agent isolation (parallel
+            # agents sharing a profile corrupt each other's sessions).
+            # NOTE: --user-data-dir is REJECTED in isolated mode ("Browser
+            # userDataDir is not supported in isolated mode", verified by
+            # running the server) — do not add it back. --headless: never
+            # pop windows on the host.
             args=["-y", "@playwright/mcp@latest", "--headless", "--isolated"],
             per_agent_isolation=True,
             isolation_args=[
-                "--user-data-dir", "{tmpdir}/hive-pw-{agent_id}",
                 "--output-dir", "{worktree}/.playwright",
             ],
             tags=["browser", "vision", "screenshots", "e2e-testing", "scraping"],

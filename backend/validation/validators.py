@@ -79,10 +79,23 @@ class Validator(ABC):
 
 
 def _git_change_for(path: str, ctx: ValidationContext) -> GitFileChange | None:
-    """Resolve a claim's path against the git-change set (best effort match)."""
-    norm = path.lstrip("./").replace("\\", "/")
+    """Resolve a claim's path against the git-change set (best effort match).
+
+    Workers often claim ABSOLUTE paths ("/home/…/worktrees/…/index.html")
+    while git reports repo-relative ones ("index.html") — the C5 e2e run
+    false-positived on exactly this. An absolute claim matches when it ends
+    with "/<relative-change-path>" or is the change path inside the
+    context's worktree.
+    """
+    raw = path.replace("\\", "/")
+    norm = raw.lstrip("./")
     for change in ctx.git_changes:
-        if change.path.lstrip("./").replace("\\", "/") == norm:
+        change_norm = change.path.replace("\\", "/").lstrip("./")
+        if change_norm == norm:
+            return change
+        # lstrip eats the leading "/" too, so absoluteness is checked on
+        # the raw path.
+        if raw.startswith("/") and raw.endswith("/" + change_norm):
             return change
     return None
 

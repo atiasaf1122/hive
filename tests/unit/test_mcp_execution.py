@@ -69,8 +69,8 @@ async def test_mcp_agent_gets_config_file_and_path() -> None:
     assert cfg.mcp_config_path, "worker did not receive an mcp config path"
     data = json.loads(Path(cfg.mcp_config_path).read_text())
     args = " ".join(data["mcpServers"]["playwright"]["args"])
-    assert "hive-pw-tester-mcp-0" in args          # per-agent isolation expanded
-    assert "/tmp/wt-mcp/.playwright" in args
+    assert "--isolated" in args                    # per-agent in-memory profile
+    assert "/tmp/wt-mcp/.playwright" in args       # output dir expanded
     # C4: attachment event visible on the stream
     assert any(e.get("type") == "mcp_servers_attached"
                and e.get("servers") == ["playwright"] for e in ws_events)
@@ -204,3 +204,34 @@ async def test_respawn_with_added_server_resumes_and_reequips() -> None:
     assert second_cfg.claude_session_id == first_cfg.claude_session_id
     data = json.loads(Path(second_cfg.mcp_config_path).read_text())
     assert "playwright" in data["mcpServers"]
+
+
+def test_equipped_agent_prompt_mentions_its_servers() -> None:
+    """C5 lesson: the agent must be TOLD it has MCP tools, or it reinstalls
+    the capability from scratch via Bash (observed in the e2e run)."""
+    from backend.orchestrator.graph import _build_agent_prompt
+
+    prompt = _build_agent_prompt(
+        _agent(mcp_servers=["playwright"]), goal="g", pending="g")
+    assert "Equipment" in prompt
+    assert "playwright" in prompt
+    assert "do NOT install" in prompt
+
+    bare = _build_agent_prompt(_agent(mcp_servers=[]), goal="g", pending="g")
+    assert "Equipment" not in bare
+
+
+def test_absolute_claim_path_matches_relative_git_change() -> None:
+    """C5 false positive: worker claimed the absolute worktree path while
+    git reported the repo-relative one."""
+    from backend.validation.validators import (
+        GitFileChange, ValidationContext, _git_change_for)
+
+    ctx = ValidationContext(
+        worktree_path="/home/u/.hive/worktrees/s/a",
+        git_changes=[GitFileChange(path="index.html", is_new=True, is_deleted=False)],
+    )
+    hit = _git_change_for("/home/u/.hive/worktrees/s/a/index.html", ctx)
+    assert hit is not None and hit.path == "index.html"
+    assert _git_change_for("index.html", ctx) is not None
+    assert _git_change_for("/elsewhere/other.html", ctx) is None

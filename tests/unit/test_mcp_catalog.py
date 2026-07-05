@@ -29,10 +29,12 @@ def test_render_expands_placeholders() -> None:
     cfg = render_mcp_config(["playwright"], agent_id="tester-x-0", worktree="/wt/t0")
     args = cfg["mcpServers"]["playwright"]["args"]
     joined = " ".join(args)
-    assert "hive-pw-tester-x-0" in joined          # per-agent profile dir
     assert "/wt/t0/.playwright" in joined          # screenshots into worktree
     assert "{agent_id}" not in joined and "{worktree}" not in joined
+    # --isolated IS the per-agent isolation (in-memory profile per
+    # instance); --user-data-dir is rejected in isolated mode.
     assert "--isolated" in args and "--headless" in args
+    assert "--user-data-dir" not in args
 
 
 def test_filesystem_scoped_to_worktree_only() -> None:

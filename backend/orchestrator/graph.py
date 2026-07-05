@@ -323,6 +323,21 @@ def _build_agent_prompt(agent: SpawnedAgent, goal: str, pending: str) -> str:
     parts.append(f"## Your subtask\n{agent.subtask or pending}")
     if agent.files_hint:
         parts.append("## Files in your scope\n" + "\n".join(f"- {f}" for f in agent.files_hint))
+    if agent.mcp_servers:
+        # C5 lesson: without this, an equipped agent doesn't know its MCP
+        # tools exist and reinstalls the capability from scratch via Bash.
+        from backend.mcp.catalog import get_spec
+        lines = []
+        for sid in agent.mcp_servers:
+            spec = get_spec(sid)
+            label = spec.label if spec else sid
+            lines.append(f"- {sid}: {label}")
+        parts.append(
+            "## Equipment\nYou are equipped with these MCP servers — their "
+            "tools are already connected (find them with tool search if not "
+            "immediately visible). Use THEM; do NOT install or re-build these "
+            "capabilities yourself:\n" + "\n".join(lines)
+        )
     parts.append(
         "Stay strictly within your subtask — other agents own the rest of the "
         "work, and duplicating it creates merge conflicts. Commit nothing "
