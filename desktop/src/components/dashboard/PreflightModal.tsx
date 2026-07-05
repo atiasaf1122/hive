@@ -92,11 +92,28 @@ export function PreflightModal({ data, projectPath, onCancel, onProceed }: Props
           </button>
           <button
             type="button"
-            onClick={onProceed}
+            // Defensive onClick guard: even if the disabled styling fails
+            // to render (custom utility class, dark-mode contrast issue),
+            // the action still won't fire while blockers exist.
+            onClick={() => { if (fixed.ok) onProceed() }}
             disabled={!fixed.ok}
-            className="btn-primary text-xs disabled:opacity-50 disabled:cursor-not-allowed"
+            aria-disabled={!fixed.ok}
+            title={
+              fixed.ok
+                ? 'Start the project with this configuration'
+                : `Resolve ${fixed.blockers.length} blocker${fixed.blockers.length === 1 ? '' : 's'} above first`
+            }
+            // When blocked, swap btn-primary out for a flat surface
+            // colour so the orange CTA can't be mistaken for an active
+            // button (previous "opacity-50" alone wasn't a strong
+            // enough signal in dark mode — users tried to click it).
+            className={
+              fixed.ok
+                ? 'btn-primary text-xs'
+                : 'text-xs px-3 py-1.5 rounded-soft bg-surface-2 text-ink-faint border border-line cursor-not-allowed'
+            }
           >
-            Start project
+            {fixed.ok ? 'Start project' : 'Fix blockers to continue'}
           </button>
         </footer>
       </div>

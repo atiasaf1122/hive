@@ -148,22 +148,29 @@ def test_approve_session_no_pending(client: TestClient):
 
 
 def test_approve_session_resolves_future(client: TestClient):
-    from backend.api.http import _pending_approvals
+    from backend.api import http as http_mod
 
-    # Manually plant a future to simulate a waiting session
+    # Manually plant a future to simulate a waiting session.
+    # Approvals are now keyed by correlation_id, not session_id (invariant #5).
     loop = asyncio.new_event_loop()
     future = loop.create_future()
-    _pending_approvals["test-approval-sess"] = future
+    http_mod._register_approval("corr-test", "test-approval-sess", future)
 
     try:
-        resp = client.post("/api/sessions/test-approval-sess/approve", json={"approved": True})
+        with patch("backend.api.http.resolve_pending_approval",
+                   new_callable=AsyncMock, return_value=True):
+            resp = client.post(
+                "/api/sessions/test-approval-sess/approve",
+                json={"approved": True, "correlation_id": "corr-test"},
+            )
         assert resp.status_code == 200
-        assert resp.json() == {"ok": True}
-        # Future should be resolved
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["correlation_id"] == "corr-test"
         assert future.done()
         assert future.result() == {"approved": True}
     finally:
-        _pending_approvals.pop("test-approval-sess", None)
+        http_mod._unregister_approval("corr-test", "test-approval-sess")
         loop.close()
 
 

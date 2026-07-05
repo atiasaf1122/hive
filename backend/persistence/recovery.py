@@ -62,6 +62,28 @@ async def mark_agents_crashed(agent_ids: list[str], db_path: Path = DB_PATH) -> 
     logger.info("Marked %d agent(s) as crashed: %s", len(agent_ids), agent_ids)
 
 
+async def expire_pending_approvals(db_path: Path = DB_PATH) -> int:
+    """Mark pending_approvals rows belonging to non-active sessions as expired.
+
+    What this does NOT do: blanket-expire every pending row. The previous
+    behaviour blanket-expired everything, which silently destroyed approvals
+    for sessions a user might re-open after the restart — until someone
+    wires a "resume the LangGraph state" path that re-registers an in-memory
+    Future, those approvals are unrecoverable but at least the DB still
+    shows they were requested. Only rows belonging to sessions whose status
+    is already 'closed' / 'failed' / 'cancelled' are clearly orphaned.
+    """
+    async with get_conn(db_path) as conn:
+        cursor = await conn.execute(
+            "UPDATE pending_approvals SET status='expired', "
+            "resolved_at=datetime('now') "
+            "WHERE status='pending' "
+            "AND session_id IN (SELECT id FROM sessions WHERE status != 'active')"
+        )
+        await conn.commit()
+        return cursor.rowcount
+
+
 async def run_startup_recovery(db_path: Path = DB_PATH) -> list[dict]:
     """Full recovery pass: detect crashed agents, mark them, return list."""
     crashed = await detect_crashed_agents(db_path)
@@ -70,6 +92,13 @@ async def run_startup_recovery(db_path: Path = DB_PATH) -> list[dict]:
         await mark_agents_crashed(agent_ids, db_path)
         logger.warning(
             "Recovered %d crashed agent(s) from previous session", len(crashed)
+        )
+
+    expired = await expire_pending_approvals(db_path)
+    if expired:
+        logger.warning(
+            "Expired %d pending approval(s) left over from previous backend process",
+            expired,
         )
     return crashed
 

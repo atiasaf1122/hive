@@ -8,8 +8,9 @@
  * Live activity strings come from `text/delta` events handled by useSessions.
  * Passive agents render at 55% opacity. Active agents have a pulsing dot.
  */
-import { IconHexagon, IconPlayerPauseFilled } from '@tabler/icons-react'
+import { IconHexagon, IconPlayerPauseFilled, IconPlayerStopFilled } from '@tabler/icons-react'
 import clsx from 'clsx'
+import { useRef } from 'react'
 import type { AgentInfo } from '../../lib/types'
 
 interface Props {
@@ -18,6 +19,13 @@ interface Props {
   activity: Record<string, string>
   costUsd?: number
   onPauseAll?: () => void
+  /** Open the agent's drill-down panel. Click an AgentPill to trigger. */
+  onAgentClick?: (agentId: string) => void
+  /** Cancel the current orchestrator turn / worker run. */
+  onCancel?: () => void
+  /** When true, the cancel button is the primary action (something's
+   *  actually running). */
+  cancelEnabled?: boolean
 }
 
 function ColorFor(role: string): string {
@@ -28,16 +36,48 @@ function ColorFor(role: string): string {
   return palette[hash % palette.length]
 }
 
-function AgentPill({ agent, activity }: { agent: AgentInfo; activity?: string }) {
+function AgentPill({
+  agent,
+  activity,
+  onClick,
+}: {
+  agent: AgentInfo
+  activity?: string
+  onClick?: () => void
+}) {
   const passive = agent.status === 'idle' && !activity
   const running = agent.status === 'running'
   const colour = ColorFor(agent.role)
+  const Wrapper = onClick ? 'button' : 'div'
+  // The pill lives inside an overflow-x-auto row; a trackpad horizontal
+  // swipe across it would otherwise fire a click and accidentally open
+  // the drill-down. Suppress the click if the pointer moved more than a
+  // few px between down and up — the standard drag-vs-click heuristic.
+  const downPosRef = useRef<{ x: number; y: number } | null>(null)
+  const handlePointerDown = (e: React.PointerEvent) => {
+    downPosRef.current = { x: e.clientX, y: e.clientY }
+  }
+  const handleClick = (e: React.MouseEvent) => {
+    if (!onClick) return
+    const down = downPosRef.current
+    if (down) {
+      const moved = Math.abs(e.clientX - down.x) + Math.abs(e.clientY - down.y)
+      downPosRef.current = null
+      if (moved > 8) return  // dragged, not clicked
+    }
+    onClick()
+  }
 
   return (
-    <div
+    <Wrapper
+      type={onClick ? 'button' : undefined}
+      onClick={handleClick}
+      onPointerDown={onClick ? handlePointerDown : undefined}
+      title={onClick ? `${agent.role} — click for live log` : undefined}
       className={clsx(
-        'flex items-center gap-2.5 min-w-[180px] max-w-[260px] px-3 py-2 rounded-soft bg-surface border border-line',
+        'flex items-center gap-2.5 min-w-[180px] max-w-[260px] px-3 py-2 rounded-soft bg-surface border border-line text-left',
         passive && 'opacity-55',
+        onClick && 'cursor-pointer hover:bg-surface-2',
       )}
     >
       <div
@@ -56,7 +96,7 @@ function AgentPill({ agent, activity }: { agent: AgentInfo; activity?: string })
         </div>
         <div className="text-[10px] text-ink-faint truncate">{agent.model}</div>
       </div>
-    </div>
+    </Wrapper>
   )
 }
 
@@ -66,6 +106,9 @@ export function AgentsBar({
   activity,
   costUsd,
   onPauseAll,
+  onAgentClick,
+  onCancel,
+  cancelEnabled,
 }: Props) {
   return (
     <div className="flex items-center gap-3 px-6 py-3 border-b border-line bg-bg overflow-x-auto">
@@ -86,13 +129,37 @@ export function AgentsBar({
         {agents.length === 0 ? (
           <div className="text-xs text-ink-faint italic">No sub-agents yet — orchestrator may chat or spawn workers.</div>
         ) : (
-          agents.map((a) => <AgentPill key={a.agent_id} agent={a} activity={activity[a.agent_id]} />)
+          agents.map((a) => (
+            <AgentPill
+              key={a.agent_id}
+              agent={a}
+              activity={activity[a.agent_id]}
+              onClick={onAgentClick ? () => onAgentClick(a.agent_id) : undefined}
+            />
+          ))
         )}
       </div>
 
       <div className="flex items-center gap-3 shrink-0 ml-auto">
         {typeof costUsd === 'number' && (
           <div className="text-xs text-ink-muted">${costUsd.toFixed(4)}</div>
+        )}
+        {onCancel && (
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={!cancelEnabled}
+            title={cancelEnabled ? 'Stop the current task' : 'Nothing to stop'}
+            className={clsx(
+              'text-xs inline-flex items-center gap-1 px-2 py-1 rounded-soft border transition-colors',
+              cancelEnabled
+                ? 'text-red-500 border-red-500/40 hover:bg-red-500/10'
+                : 'text-ink-faint border-line opacity-50 cursor-not-allowed',
+            )}
+          >
+            <IconPlayerStopFilled size={12} />
+            Stop
+          </button>
         )}
         {onPauseAll && agents.length > 0 && (
           <button

@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from backend.api import install_http
@@ -166,6 +167,131 @@ async def test_mcp_uninstall_removes_entry(monkeypatch, tmp_path) -> None:
 
     data = json.loads(config_path.read_text())
     assert "filesystem" not in data.get("mcpServers", {})
+
+
+# ── install URL allowlist (SSRF guard) ────────────────────────────────────
+
+def test_validate_install_url_rejects_http_scheme() -> None:
+    from backend.api.install_http import _validate_install_url
+    with pytest.raises(HTTPException) as exc:
+        _validate_install_url("http://github.com/anthropics/anthropic-cookbook")
+    assert exc.value.status_code == 400
+    assert "https" in exc.value.detail
+
+
+def test_validate_install_url_rejects_non_allowlisted_host() -> None:
+    from backend.api.install_http import _validate_install_url
+    with pytest.raises(HTTPException) as exc:
+        _validate_install_url("https://evil.example.com/payload.md")
+    assert exc.value.status_code == 400
+    assert "allowed" in exc.value.detail.lower()
+
+
+def test_validate_install_url_rejects_loopback_hostname() -> None:
+    from backend.api.install_http import _validate_install_url
+    with pytest.raises(HTTPException) as exc:
+        _validate_install_url("https://localhost:8765/skill.md")
+    assert exc.value.status_code == 400
+    assert "localhost" in exc.value.detail
+
+
+def test_validate_install_url_rejects_loopback_ip_literal() -> None:
+    from backend.api.install_http import _validate_install_url
+    with pytest.raises(HTTPException) as exc:
+        _validate_install_url("https://127.0.0.1:8765/skill.md")
+    assert exc.value.status_code == 400
+
+
+def test_validate_install_url_allows_github() -> None:
+    from backend.api.install_http import _validate_install_url
+    _validate_install_url(
+        "https://github.com/anthropics/anthropic-cookbook/tree/main/skills/code-review"
+    )
+
+
+def test_validate_install_url_allows_raw_github() -> None:
+    from backend.api.install_http import _validate_install_url
+    _validate_install_url(
+        "https://raw.githubusercontent.com/anthropics/anthropic-cookbook/main/skills/x/SKILL.md"
+    )
+
+
+def test_validate_install_url_blocks_dns_rebind_to_private(monkeypatch) -> None:
+    """An allowlisted host that resolves to a private IP must be rejected."""
+    import socket as _socket
+    from backend.api import install_http as _ih
+
+    def fake_getaddrinfo(host, _port, *_a, **_kw):
+        return [(_socket.AF_INET, _socket.SOCK_STREAM, 0, "", ("10.0.0.5", 0))]
+
+    monkeypatch.setattr(_ih.socket, "getaddrinfo", fake_getaddrinfo)
+    with pytest.raises(HTTPException) as exc:
+        _ih._validate_install_url("https://github.com/owner/repo/tree/main/x")
+    assert exc.value.status_code == 400
+    assert "non-public" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_skill_install_blocks_ssrf_at_endpoint(monkeypatch, tmp_path) -> None:
+    """End-to-end: a malicious URL through the public endpoint is refused."""
+    monkeypatch.setattr(install_http, "SKILLS_ROOT", tmp_path)
+
+    from backend.api.install_http import SkillInstallRequest, skill_install
+    with pytest.raises(HTTPException) as exc:
+        await skill_install(SkillInstallRequest(
+            id="evil",
+            name="evil",
+            description="x",
+            source="cookbook",
+            url="http://127.0.0.1:8765/admin/wipe",
+            tags=[],
+        ))
+    assert exc.value.status_code == 400
+
+
+# ── claude.json corruption refuses to overwrite ───────────────────────────
+
+def test_read_claude_config_raises_on_corrupt_json_and_writes_backup(tmp_path) -> None:
+    """Corrupt JSON must raise (not return {}) so the caller does not
+    proceed to overwrite the file with a fresh config that wipes every
+    non-MCP key the user had set."""
+    from backend.api.install_http import _read_claude_config
+
+    config = tmp_path / "claude.json"
+    original = '{"this is not json", "memory": {"important": "data"}}'
+    config.write_text(original, encoding="utf-8")
+
+    with pytest.raises(HTTPException) as exc:
+        _read_claude_config(config)
+    assert exc.value.status_code == 500
+    assert "backup" in exc.value.detail.lower()
+
+    # Original must NOT have been overwritten.
+    assert config.read_text(encoding="utf-8") == original
+    # A backup must exist alongside it.
+    backups = list(tmp_path.glob("claude.json.corrupted.*.bak"))
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding="utf-8") == original
+
+
+@pytest.mark.asyncio
+async def test_mcp_install_refuses_to_wipe_corrupt_config(monkeypatch, tmp_path) -> None:
+    """End-to-end: mcp_install raises 500 instead of silently overwriting
+    a corrupt ~/.claude.json with a fresh one."""
+    config_path = tmp_path / "claude.json"
+    original = '{"broken json'
+    config_path.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(install_http, "_claude_config_path", lambda: config_path)
+
+    from backend.api.install_http import MCPInstallRequest, mcp_install
+    with pytest.raises(HTTPException) as exc:
+        await mcp_install(MCPInstallRequest(
+            id="mcp/x", name="x",
+            install={"transport": "npm", "package": "p"},
+            permissions=[],
+        ))
+    assert exc.value.status_code == 500
+    assert config_path.read_text(encoding="utf-8") == original
 
 
 # Suppress unused-import warning when running this file in isolation.

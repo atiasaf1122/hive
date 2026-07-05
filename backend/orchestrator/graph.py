@@ -370,10 +370,22 @@ async def review_node(state: GraphState) -> dict:
     if combined_text:
         summary = (summary + "\n\n" if summary else "") + combined_text
 
+    final_message = summary or f"Turn {turn_status}."
     history.append({
         "role": "assistant",
-        "content": summary or f"Turn {turn_status}.",
+        "content": final_message,
         "ts": time.time(),
+    })
+
+    # Also push the message via the WebSocket — review_node mutates
+    # conversation_history server-side, but the frontend store
+    # reconstructs chat from WS events, not from /history. Without this
+    # explicit emit, the spinner spins forever and the user never sees
+    # the combined worker output until they refresh.
+    await _emit_to_ws(state["session_id"], {
+        "type": "orchestrator_response",
+        "session_id": state["session_id"],
+        "text": final_message,
     })
 
     combined_result = AgentResult(
@@ -394,6 +406,10 @@ async def review_node(state: GraphState) -> dict:
         },
         "result": combined_result,
         "conversation_history": history,
+        # Update last_response so wait_for_user's awaiting_user event
+        # carries the combined summary (a safety net for clients that
+        # only consume awaiting_user, e.g. a reconnect mid-review).
+        "last_response": final_message,
         # Reset per-turn slots so the next turn starts clean
         "spawn_plan": None,
         "worker_results": {},
@@ -499,7 +515,17 @@ async def run_session(
 ) -> AgentResult | SessionInterrupt:
     """Start a session. Returns AgentResult only if the user closes immediately;
     normally returns SessionInterrupt as the graph parks for the next message."""
-    await create_session(session_id, name=task[:80], db_path=db_path)
+    # path= and approval_mode= persisted so session recovery, Telegram
+    # routing, and the UI list view all see the right values. Skipping
+    # either silently stores '' / 'full-auto', which previously surfaced
+    # as "project disappeared" / "wrong approval mode" after restart.
+    await create_session(
+        session_id,
+        name=task[:80],
+        path=worktree_path,
+        approval_mode=approval_mode,
+        db_path=db_path,
+    )
 
     async with AsyncSqliteSaver.from_conn_string(str(db_path)) as checkpointer:
         graph = build_graph().compile(checkpointer=checkpointer)
@@ -770,6 +796,13 @@ async def _execute_worker(
                 "input_tokens": event.input_tokens,
                 "output_tokens": event.output_tokens,
                 "cost_usd": event.cost_usd,
+                # Tool detail — without these the drill-down panel
+                # could only show the word "tool" 50 times in a row.
+                "tool_name": event.tool_name,
+                "tool_input": event.tool_input,
+                "tool_use_id": event.tool_use_id,
+                "tool_result": event.tool_result,
+                "tool_result_error": event.tool_result_error,
             })
 
             if event.type == EventType.TEXT_DELTA and event.text:

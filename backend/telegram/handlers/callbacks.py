@@ -11,21 +11,25 @@ from backend.telegram.config import load_config
 logger = logging.getLogger(__name__)
 router = Router()
 
-# Callback data conventions:
-#   "approve:<session_id>"
-#   "reject:<session_id>"
-#   "diff:<session_id>"
+# Callback data conventions (post-correlation-IDs):
+#   "approve:<correlation_id>"
+#   "reject:<correlation_id>"
+#   "diff:<correlation_id>"
+# Telegram callback_data has a 64-byte budget; uuid4 hex is 32 chars so we
+# still have ample room. We deliberately do NOT pack session_id here — the
+# correlation_id is unique across sessions and the resolver looks the
+# session up via the persisted pending_approvals row.
 APPROVE_PREFIX = "approve:"
 REJECT_PREFIX = "reject:"
 DIFF_PREFIX = "diff:"
 
 
-def build_approval_keyboard(session_id: str) -> InlineKeyboardMarkup:
+def build_approval_keyboard(correlation_id: str) -> InlineKeyboardMarkup:
     """Inline-button row attached to approval notifications."""
     return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✓ Approve", callback_data=f"{APPROVE_PREFIX}{session_id}"),
-        InlineKeyboardButton(text="✗ Reject",  callback_data=f"{REJECT_PREFIX}{session_id}"),
-        InlineKeyboardButton(text="👁 Details", callback_data=f"{DIFF_PREFIX}{session_id}"),
+        InlineKeyboardButton(text="✓ Approve", callback_data=f"{APPROVE_PREFIX}{correlation_id}"),
+        InlineKeyboardButton(text="✗ Reject",  callback_data=f"{REJECT_PREFIX}{correlation_id}"),
+        InlineKeyboardButton(text="👁 Details", callback_data=f"{DIFF_PREFIX}{correlation_id}"),
     ]])
 
 
@@ -34,8 +38,8 @@ async def on_approve(query: CallbackQuery) -> None:
     if not _allowed(query):
         await query.answer("Not allowed.")
         return
-    session_id = (query.data or "")[len(APPROVE_PREFIX):]
-    resolved = await _resolve_approval(session_id, approved=True)
+    correlation_id = (query.data or "")[len(APPROVE_PREFIX):]
+    resolved = await _resolve_approval(correlation_id, approved=True)
     msg = "✓ Approved" if resolved else "No pending approval (already handled?)"
     await query.answer(msg)
     if query.message and resolved:
@@ -47,8 +51,8 @@ async def on_reject(query: CallbackQuery) -> None:
     if not _allowed(query):
         await query.answer("Not allowed.")
         return
-    session_id = (query.data or "")[len(REJECT_PREFIX):]
-    resolved = await _resolve_approval(session_id, approved=False)
+    correlation_id = (query.data or "")[len(REJECT_PREFIX):]
+    resolved = await _resolve_approval(correlation_id, approved=False)
     msg = "✗ Rejected" if resolved else "No pending approval"
     await query.answer(msg)
     if query.message and resolved:
@@ -63,15 +67,35 @@ async def on_diff(query: CallbackQuery) -> None:
     await query.answer("Details: use the web UI for the full diff view.", show_alert=True)
 
 
-async def _resolve_approval(session_id: str, approved: bool) -> bool:
-    """Resolve the pending approval future. Returns True if a future was waiting."""
+async def _resolve_approval(correlation_id: str, approved: bool) -> bool:
+    """Resolve the pending approval future by correlation_id. Returns True
+    if a live waiter existed and was resolved."""
     from backend.api import http as http_mod
+    from backend.persistence.events import (
+        get_pending_approval,
+        resolve_pending_approval,
+    )
 
-    future = http_mod._pending_approvals.get(session_id)
+    future = http_mod._pending_approvals.get(correlation_id)
     if not future or future.done():
         return False
-    future.set_result({"approved": approved})
-    http_mod._pending_approvals.pop(session_id, None)
+
+    row = await get_pending_approval(correlation_id)
+    session_id = row.get("session_id") if row else None
+
+    payload = {"approved": approved}
+    persisted = await resolve_pending_approval(
+        correlation_id,
+        status="approved" if approved else "rejected",
+        response_payload=payload,
+    )
+    if not persisted:
+        return False
+    future.set_result(payload)
+    if session_id:
+        http_mod._unregister_approval(correlation_id, session_id)
+    else:
+        http_mod._pending_approvals.pop(correlation_id, None)
     return True
 
 

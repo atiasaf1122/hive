@@ -109,35 +109,76 @@ async def orchestrate(
 ) -> OrchestratorDecision:
     """Run one orchestrator turn — answer the user, optionally with a team to spawn.
 
-    `project_path` is currently NOT used as the planner's cwd. Reason:
-    a planner spawned at the workspace cwd is a `claude --dangerously-
-    skip-permissions` process with write access to the project. In
-    testing it ignored the JSON-only instruction and just *built the
-    project itself* — leaving untracked files in master that then
-    broke the Reviewer's merge of the builder's worktree.
-    Workers do the editing; the planner plans. Keep this `/tmp`
-    until we wire `--allowed-tools` to restrict the planner to
-    Read/Grep/Glob.
+    `project_path` is used as the planner's cwd so Read/Glob/Grep tools
+    can actually inspect the user's files when choosing a team. Originally
+    we forced cwd=/tmp because an unconstrained planner sometimes ignored
+    the JSON-only instruction and started building the project itself
+    (leaving untracked files that broke the Reviewer's merge). That risk
+    is now contained by `allowed_tools=["Read","Glob","Grep"]` below —
+    the planner has no write capability, so cwd=project_path is safe.
+    Falls back to /tmp if the path is missing/inaccessible (e.g. tests).
     """
     worker = ClaudeCLIWorker()
     prompt = _build_prompt(message, history or [])
 
-    # Project_path is accepted for future read-only modes but currently
-    # ignored — see the docstring above.
-    _ = project_path
     cwd = "/tmp"
+    if project_path:
+        try:
+            if Path(project_path).is_dir():
+                cwd = project_path
+        except OSError:
+            pass
 
     config = WorkerConfig(
         agent_id=f"orchestrator-{session_id}",
         session_id=session_id,
         model=model,
         worktree_path=cwd,
-        max_turns=3,
+        # `max_turns=1` means: produce the decision in a single
+        # response. Higher values give Claude room to chain tool calls
+        # — but the planner's job is to DECIDE, not investigate. In
+        # dogfooding it ran 4× WebSearch + a Bash and blew the 3-turn
+        # budget without ever returning the JSON, dropping us into
+        # fallback-team-with-approval-gate hell.
+        max_turns=1,
+        # No WebSearch / WebFetch / Bash here — those are research
+        # tools the planner doesn't need. Inspecting the local project
+        # tree (Read/Glob/Grep) is enough to choose a team. If
+        # research is actually required, that's the team's job, not
+        # the planner's.
+        allowed_tools=["Read", "Glob", "Grep"],
     )
+
+    # Stream planner activity live to the session's WebSocket so the user
+    # sees tool calls + thinking instead of staring at a static
+    # "orchestrator is thinking" pill. Import lazily — keeps the planner
+    # importable from tests that don't have a backend running.
+    from backend.api import event_bus
 
     chunks: list[str] = []
     final_text: str | None = None  # populated when TEXT_DONE arrives
     async for event in worker.run(prompt, config):
+        # Mirror everything except the final cost/end into the
+        # WebSocket so the UI can render a live activity feed.
+        # `event_bus.emit` is non-blocking (put_nowait + ring append,
+        # drops on QueueFull) so awaiting here cannot backpressure
+        # the worker's stream parser.
+        if event.type in (
+            EventType.TEXT_DELTA, EventType.TOOL_USE, EventType.TOOL_RESULT,
+        ):
+            try:
+                await event_bus.emit(session_id, {
+                    "type": "planner_event",
+                    "session_id": session_id,
+                    "agent_id": event.agent_id,
+                    "kind": event.type,
+                    "text": event.text,
+                    "tool_name": event.tool_name,
+                    "tool_input": event.tool_input,
+                })
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Planner WS emit failed: %s", exc)
+
         if event.type == EventType.TEXT_DELTA and event.text:
             chunks.append(event.text)
         elif event.type == EventType.TEXT_DONE and event.text:
@@ -261,9 +302,18 @@ def _extract_first_json_object(text: str) -> dict | None:
 
 
 def _fallback_team() -> TeamComposition:
-    """Minimal single-builder team used when planning fails."""
+    """Minimal single-builder team used when planning fails.
+
+    Confidence is intentionally set ABOVE the 0.7 approval-gate
+    threshold. A 0.5 confidence dropped the user into a "Approval
+    needed (50%)" interrupt even in full-auto mode — surprising and
+    annoying when the planner just failed transiently. The fallback
+    is a known-safe single-Builder spawn; we trust it enough not to
+    block on approval. Users in `checkpoint` / `manual` modes still
+    see the gate (mode is the primary signal, confidence is secondary).
+    """
     return TeamComposition(
         team=[TeamMember(role="Builder", model="claude:sonnet", count=1)],
-        confidence=0.5,
+        confidence=0.75,
         rationale="fallback: planning failed, using single Builder",
     )

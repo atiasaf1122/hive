@@ -12,7 +12,7 @@
  * /close); everything else is sent as a normal message and the
  * orchestrator decides what to do with it.
  */
-import { IconArrowUp, IconPaperclip, IconMicrophone } from '@tabler/icons-react'
+import { IconArrowUp } from '@tabler/icons-react'
 import { useMemo, useRef, useState } from 'react'
 import { api } from '../../lib/api'
 import { useSessions } from '../../stores/sessions'
@@ -155,13 +155,6 @@ export function Composer({ sessionId, disabled }: Props) {
             />
 
             <div className="flex items-center gap-1 mt-2 pt-2 border-t border-line text-ink-faint">
-              <ToolButton title="Attach (Phase 9C)" onClick={() => {}} disabled>
-                <IconPaperclip size={16} strokeWidth={1.75} />
-              </ToolButton>
-              <ToolButton title="Voice (Phase 9C)" onClick={() => {}} disabled>
-                <IconMicrophone size={16} strokeWidth={1.75} />
-              </ToolButton>
-
               <div className="flex-1" />
 
               <div className="text-[11px] text-ink-faint mr-3 hidden sm:block">
@@ -190,23 +183,3 @@ export function Composer({ sessionId, disabled }: Props) {
   )
 }
 
-interface ToolButtonProps {
-  children: React.ReactNode
-  title: string
-  onClick: () => void
-  disabled?: boolean
-}
-
-function ToolButton({ children, title, onClick, disabled }: ToolButtonProps) {
-  return (
-    <button
-      type="button"
-      title={title}
-      onClick={onClick}
-      disabled={disabled}
-      className="w-7 h-7 rounded-soft hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center text-ink-muted hover:text-ink transition-colors"
-    >
-      {children}
-    </button>
-  )
-}

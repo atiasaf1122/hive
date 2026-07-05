@@ -44,7 +44,6 @@ export function PipelineWizard({ open, onClose, onCreated }: Props) {
   const [task, setTask] = useState('')
   const [model, setModel] = useState('claude:sonnet')
   const [approval, setApproval] = useState('full-auto')
-  const [notifyTelegram, setNotifyTelegram] = useState(true)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
@@ -116,12 +115,7 @@ export function PipelineWizard({ open, onClose, onCreated }: Props) {
               onApproval={setApproval}
             />
           )}
-          {step === 2 && (
-            <StepNotify
-              notifyTelegram={notifyTelegram}
-              onNotifyTelegram={setNotifyTelegram}
-            />
-          )}
+          {step === 2 && <StepNotify />}
 
           {err && (
             <div className="mt-3 text-xs text-red-500 bg-red-500/10 border border-red-500/20 rounded-soft px-3 py-2">
@@ -331,12 +325,24 @@ function StepWhat({ name, task, model, approval, onName, onTask, onModel, onAppr
           <label className="text-xs text-ink-muted block mb-1">Model</label>
           <select
             value={model}
-            onChange={(e) => onModel(e.target.value)}
+            onChange={(e) => {
+              const next = e.target.value
+              // Pipelines run autonomously — letting Opus drive a recurring
+              // pipeline is the most expensive thing the user can do here.
+              // Warn loudly but don't block. Invariant #7.
+              if (next === 'claude:opus') {
+                const ok = window.confirm(
+                  'Opus on a scheduled pipeline is significantly more expensive than Sonnet. Use it anyway?',
+                )
+                if (!ok) return
+              }
+              onModel(next)
+            }}
             className="input-soft text-sm"
           >
             <option value="claude:sonnet">Sonnet</option>
-            <option value="claude:opus">Opus</option>
             <option value="claude:haiku">Haiku</option>
+            <option value="claude:opus">Opus (costly)</option>
           </select>
         </div>
         <div>
@@ -356,35 +362,23 @@ function StepWhat({ name, task, model, approval, onName, onTask, onModel, onAppr
   )
 }
 
-interface NotifyProps {
-  notifyTelegram: boolean
-  onNotifyTelegram: (v: boolean) => void
-}
-
-function StepNotify({ notifyTelegram, onNotifyTelegram }: NotifyProps) {
+function StepNotify() {
   return (
     <div className="space-y-3">
-      <div className="text-xs text-ink-muted">Where should HIVE ping you?</div>
+      <div className="text-xs text-ink-muted">Where will HIVE ping you?</div>
       <div className="card p-3 flex items-center gap-3">
         <IconBell size={16} className="text-ink-muted" />
         <div className="flex-1 text-sm text-ink">In-app banner</div>
         <span className="text-[11px] text-ink-faint">Always on</span>
       </div>
-      <div
-        className={clsx(
-          'card p-3 flex items-center gap-3 cursor-pointer',
-          notifyTelegram && 'border-accent',
-        )}
-        onClick={() => onNotifyTelegram(!notifyTelegram)}
-      >
+      <div className="card p-3 flex items-center gap-3 opacity-70">
         <IconBell size={16} className="text-ink-muted" />
         <div className="flex-1">
           <div className="text-sm text-ink">Telegram</div>
           <div className="text-[11px] text-ink-faint">
-            Requires bot setup — see Settings → Integrations
+            On globally when configured in Settings → Integrations · attach this session with <code>/attach</code>
           </div>
         </div>
-        <input type="checkbox" checked={notifyTelegram} onChange={() => {}} className="pointer-events-none" />
       </div>
     </div>
   )

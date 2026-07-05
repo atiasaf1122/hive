@@ -14,10 +14,12 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { TabBar } from '../components/project/TabBar'
 import { AgentsBar } from '../components/project/AgentsBar'
+import { AgentDrillDown } from '../components/project/AgentDrillDown'
 import { Chat } from '../components/project/Chat'
 import { Composer } from '../components/project/Composer'
 import { SafetyOverrideModal } from '../components/project/SafetyOverrideModal'
 import { api } from '../lib/api'
+import { toast } from '../lib/toast'
 import { subscribeSession } from '../lib/ws'
 import type { ConversationEntry, SessionInfo } from '../lib/types'
 import { useProjectTabs } from '../stores/projectTabs'
@@ -35,6 +37,8 @@ export function ProjectView() {
   const closeTab = useProjectTabs((s) => s.closeTab)
   const saveTemplate = useTemplates((s) => s.save)
   const [safetyOpen, setSafetyOpen] = useState(false)
+  // Which agent's drill-down panel is open (null = closed).
+  const [drillAgent, setDrillAgent] = useState<string | null>(null)
 
   // Make sure this session is in the tabs row.
   useEffect(() => {
@@ -52,6 +56,9 @@ export function ProjectView() {
         if (!cancelled) upsert(info)
       } catch (err) {
         console.error('failed to load session', err)
+        toast.error(
+          `Couldn't load this project. ${err instanceof Error ? err.message : ''}`.trim(),
+        )
       }
       try {
         const { history } = await api.get<{ history: ConversationEntry[] }>(
@@ -89,11 +96,10 @@ export function ProjectView() {
     () => (project ? Object.values(project.agents) : []),
     [project],
   )
-  const totalCost = useMemo(
-    () =>
-      project?.events.reduce((acc, e) => acc + (e.cost_usd ?? 0), 0) ?? 0,
-    [project],
-  )
+  // Reads the store's monotonic accumulator (not the events buffer)
+  // so the displayed total doesn't regress when older system/cost
+  // events fall off the 200-entry ring.
+  const totalCost = project?.totalCostUsd ?? 0
 
   if (!id) {
     return <div className="p-8 text-ink-muted">No project selected.</div>
@@ -117,8 +123,32 @@ export function ProjectView() {
       await api.post(`/api/sessions/${id}/close`)
     } catch (err) {
       console.error('close failed', err)
+      toast.error(
+        `Couldn't close the session. ${err instanceof Error ? err.message : ''}`.trim(),
+      )
     }
   }
+
+  async function cancel() {
+    if (!id) return
+    try {
+      await api.post(`/api/sessions/${id}/cancel`)
+    } catch (err) {
+      console.error('cancel failed', err)
+      toast.error(
+        `Couldn't cancel the session. ${err instanceof Error ? err.message : ''}`.trim(),
+      )
+    }
+  }
+
+  // "Cancel" is meaningful only when the session is actively working —
+  // mid-orchestration, spawning, or running agents. Once it's parked
+  // (awaiting_user) or done, Stop turns into a no-op. 'spawning' was
+  // missing here so Stop was disabled in the seconds between
+  // team_approval and spawn_complete — fixed.
+  const cancelEnabled = [
+    'starting', 'planning', 'spawning', 'running', 'waiting_approval',
+  ].includes(status)
 
   function saveAsTemplate() {
     if (!project) return
@@ -187,7 +217,18 @@ export function ProjectView() {
         agents={agentArray}
         activity={project.activity}
         costUsd={totalCost}
+        onAgentClick={(aid) => setDrillAgent(aid)}
+        onCancel={() => void cancel()}
+        cancelEnabled={cancelEnabled}
       />
+
+      {drillAgent && (
+        <AgentDrillDown
+          agentId={drillAgent}
+          events={project.events}
+          onClose={() => setDrillAgent(null)}
+        />
+      )}
 
       <Chat
         sessionId={id}
@@ -195,6 +236,8 @@ export function ProjectView() {
         team={project.team}
         agents={agentArray}
         interrupt={project.interrupt}
+        plannerLog={project.plannerLog}
+        stallHint={project.stallHint}
       />
 
       <Composer sessionId={id} disabled={isTerminal} />

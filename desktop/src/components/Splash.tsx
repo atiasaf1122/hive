@@ -23,9 +23,15 @@ interface Props {
 export function Splash({ onReady }: Props) {
   const [state, setState] = useState<State>('connecting')
   const [elapsed, setElapsed] = useState(0)
+  // `attempt` is the retry counter — bumping it re-runs the effect that
+  // probes the backend. Without this the user is stuck on the failed
+  // splash with no way to recover except force-quit.
+  const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
     let cancelled = false
+    setState('connecting')
+    setElapsed(0)
     const start = Date.now()
     const tick = window.setInterval(() => {
       if (!cancelled) setElapsed(Math.floor((Date.now() - start) / 1000))
@@ -48,7 +54,7 @@ export function Splash({ onReady }: Props) {
       cancelled = true
       window.clearInterval(tick)
     }
-  }, [onReady])
+  }, [onReady, attempt])
 
   return (
     <div className="h-full w-full flex flex-col items-center justify-center bg-bg select-none px-8">
@@ -90,8 +96,24 @@ export function Splash({ onReady }: Props) {
               terminal and run:{'\n'}
               <code className="text-ink">  hive start</code>
               {'\n\n'}
-              Then close and reopen this window. The packaged .msi ships its
-              own backend, so this only affects the dev workflow.
+              The packaged .msi ships its own backend, so this only affects
+              the dev workflow.
+            </div>
+            <div className="flex gap-2 mt-4 justify-center">
+              <button
+                type="button"
+                className="px-3 py-1.5 rounded bg-accent text-white text-sm hover:opacity-90"
+                onClick={() => setAttempt((n) => n + 1)}
+              >
+                Retry
+              </button>
+              <button
+                type="button"
+                className="px-3 py-1.5 rounded border border-surface-2 text-sm hover:bg-surface-1"
+                onClick={() => onReady()}
+              >
+                Continue offline
+              </button>
             </div>
           </div>
         )}

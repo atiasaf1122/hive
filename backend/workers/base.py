@@ -80,6 +80,11 @@ class WorkerConfig(BaseModel):
     system_prompt: str = ""
     max_turns: int = 20
     env_overrides: dict[str, str] = Field(default_factory=dict)
+    # Optional whitelist of tool names the agent may use (e.g. for the
+    # planner: ["Read", "Grep", "Glob", "WebFetch"]). When None the
+    # default claude CLI tool set applies. Empty list disables tools
+    # entirely. Threaded into `--allowed-tools` on ClaudeCLIWorker.
+    allowed_tools: list[str] | None = None
 
 
 @runtime_checkable

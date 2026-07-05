@@ -556,7 +556,12 @@ async def _pipelines_run_async(pipeline_id: str) -> None:
     workspace = os.path.expanduser(f"~/.hive/sessions/{session_id}")
     os.makedirs(workspace, exist_ok=True)
 
-    await db_create_session(session_id, name=p["task"][:80], approval_mode=p["approval_mode"])
+    await db_create_session(
+        session_id,
+        name=p["task"][:80],
+        path=workspace,
+        approval_mode=p["approval_mode"],
+    )
     run_id = await record_pipeline_run(pipeline_id, session_id, triggered_by="cli")
     typer.echo(f"Run started: session={session_id} run={run_id}")
     typer.echo(f"Task: {p['task']}")

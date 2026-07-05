@@ -73,7 +73,6 @@ function compact(n: number): string {
 const LIMITS = {
   session5h: 600_000,
   weeklyAll: 10_000_000,
-  weeklySonnet: 4_000_000,
   dailyRoutine: 15,
 }
 
@@ -188,7 +187,6 @@ export function Usage() {
 function ClaudeBars({ u }: { u: UsageSummary }) {
   const sessionUsed = u.claude.last_5h.input_tokens + u.claude.last_5h.output_tokens
   const weeklyAllUsed = u.claude.last_7d.input_tokens + u.claude.last_7d.output_tokens
-  const weeklySonnetUsed = Math.round(weeklyAllUsed * 0.7)
   const routineUsed = 0
 
   const sessionPct = pctFor(sessionUsed, LIMITS.session5h)
@@ -219,14 +217,6 @@ function ClaudeBars({ u }: { u: UsageSummary }) {
         suffix="tokens"
       />
       <LimitBar
-        label="Weekly limits · Sonnet only"
-        sub={`resets Monday · in ${untilNextMonday()}`}
-        used={weeklySonnetUsed}
-        ceiling={LIMITS.weeklySonnet}
-        suffix="tokens"
-        muted
-      />
-      <LimitBar
         label="Daily included routine runs"
         sub="resets at midnight local"
         used={routineUsed}
@@ -234,9 +224,11 @@ function ClaudeBars({ u }: { u: UsageSummary }) {
         suffix="runs"
       />
       <div className="text-[11px] text-ink-faint pt-1">
-        Sonnet-only is a proxy (≈70% of the weekly total) because HIVE doesn't separate
-        models in the local cost log. "Routine runs" only counts Max-plan automated runs,
-        which Anthropic doesn't surface separately yet.
+        "Routine runs" only counts Max-plan automated runs, which Anthropic
+        doesn't surface separately yet — check{' '}
+        <a href="https://claude.ai/usage" target="_blank" rel="noreferrer" className="underline">
+          claude.ai/usage
+        </a>{' '}for per-model breakdowns.
       </div>
     </div>
   )

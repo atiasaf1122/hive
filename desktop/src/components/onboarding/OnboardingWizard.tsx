@@ -48,8 +48,17 @@ export function OnboardingWizard() {
   const [step, setStep] = useState<Step>(0)
 
   function next() {
-    setStep((s) => (s + 1) as Step)
-    if (step === 5) finish()
+    // Branch off the FRESH value inside the updater. The previous form read
+    // `step` from the outer closure, which was stale right after setStep —
+    // it happened to work on the last step (5 === 5) but would have walked
+    // off the STEP_TITLES end if the close gate ever became async.
+    setStep((s) => {
+      if (s >= 5) {
+        finish()
+        return s
+      }
+      return (s + 1) as Step
+    })
   }
   function back() {
     setStep((s) => Math.max(0, (s - 1) as Step) as Step)

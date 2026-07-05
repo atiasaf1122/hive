@@ -28,9 +28,17 @@ class OllamaWorker:
 
     Model is specified in WorkerConfig.model as "ollama:<model_name>",
     e.g. "ollama:llama3.1" or "ollama:qwen2.5".
+
+    When `base_url` is left as the default we ask `backend.detection`
+    for the URL it last verified working. On WSL2 that's typically
+    the Windows host (`http://172.18.x.x:11434`) rather than
+    `localhost:11434` — the latter doesn't traverse the WSL VM.
     """
 
-    def __init__(self, base_url: str = _OLLAMA_BASE) -> None:
+    def __init__(self, base_url: str | None = None) -> None:
+        if base_url is None:
+            from backend.detection import resolved_ollama_base
+            base_url = resolved_ollama_base()
         self._base_url = base_url
 
     async def run(self, prompt: str, config: WorkerConfig) -> AsyncIterator[HiveEvent]:

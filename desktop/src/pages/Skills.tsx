@@ -13,7 +13,7 @@
  */
 import { IconBook2, IconRefresh, IconSearch } from '@tabler/icons-react'
 import clsx from 'clsx'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { SkillCard, type SkillItem } from '../components/skills/SkillCard'
 import { SkillPreviewModal } from '../components/skills/SkillPreviewModal'
 import { FlowStrip, HeroHeader } from '../components/ui/HeroHeader'
@@ -46,8 +46,13 @@ export function Skills() {
   const [previewing, setPreviewing] = useState<SkillItem | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  // requestId guards against out-of-order responses: when the user types
+  // fast and an earlier slow request lands after a later fast one, the
+  // earlier response is dropped because its id no longer matches.
+  const requestIdRef = useRef(0)
 
-  async function load(force = false) {
+  const load = useCallback(async (force = false) => {
+    const myId = ++requestIdRef.current
     if (force) setRefreshing(true)
     try {
       const url = new URL('/api/registries/skills/search', 'http://x')
@@ -55,18 +60,22 @@ export function Skills() {
       if (filter !== 'all' && filter !== 'installed') url.searchParams.set('source', filter)
       if (force) url.searchParams.set('force_refresh', 'true')
       const res = await api.get<SearchResponse>(url.pathname + url.search)
+      if (myId !== requestIdRef.current) return  // stale — newer request in flight
       setData(res)
       setError(null)
     } catch (e) {
+      if (myId !== requestIdRef.current) return
       setError(e instanceof Error ? e.message : 'Could not load skills')
     } finally {
-      setRefreshing(false)
+      if (myId === requestIdRef.current) setRefreshing(false)
     }
-  }
-  useEffect(() => {
-    void load()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, filter])
+
+  useEffect(() => {
+    // 250ms debounce so we don't fire a search per keystroke.
+    const handle = window.setTimeout(() => { void load() }, 250)
+    return () => window.clearTimeout(handle)
+  }, [load])
 
   const items = useMemo(() => {
     if (!data) return []

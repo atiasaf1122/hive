@@ -30,6 +30,17 @@ export interface ProjectState {
   activity: Record<string, string>
   /** Per-event log (raw WS events) for debugging. Capped at 200 entries. */
   events: WSEvent[]
+  /** Running session cost in USD. Accumulated independently of the
+   *  events buffer so it doesn't regress when older system/cost
+   *  events fall off the 200-entry ring. */
+  totalCostUsd: number
+  /** Short, human-readable strings from planner_event — what the
+   *  orchestrator is doing right now. Cleared when the assistant's
+   *  next message lands so it doesn't pollute history. */
+  plannerLog: string[]
+  /** When the watchdog fires, expose it so the UI can show a "still
+   *  thinking" hint instead of staring at an unmoving spinner. */
+  stallHint: string | null
 }
 
 interface State {
@@ -130,6 +141,14 @@ export const useSessions = create<State & Actions>((set, get) => ({
       let interrupt: InterruptPayload | null = proj.interrupt
       let team: TeamComposition | null = proj.team
       let activity = proj.activity
+      let plannerLog = proj.plannerLog
+      let stallHint = proj.stallHint
+      // Accumulate cost monotonically so the displayed total doesn't
+      // regress when older system/cost events fall off the 200-entry
+      // events ring. The store is the source of truth; the ProjectView
+      // memo now reads this instead of re-summing the buffer.
+      const totalCostUsd =
+        proj.totalCostUsd + (typeof ev.cost_usd === 'number' ? ev.cost_usd : 0)
 
       const updateStatus = (status: SessionStatus) => {
         info = { ...info, status }
@@ -141,6 +160,9 @@ export const useSessions = create<State & Actions>((set, get) => ({
           break
         case 'orchestrator_thinking':
           updateStatus('planning')
+          // Reset the planner log when a new orchestrator turn starts.
+          plannerLog = []
+          stallHint = null
           break
         case 'orchestrator_decision':
           if (ev.team_composition) team = ev.team_composition
@@ -148,7 +170,35 @@ export const useSessions = create<State & Actions>((set, get) => ({
         case 'orchestrator_response':
           if (ev.text) {
             history = [...history, { role: 'assistant', content: ev.text, ts: Date.now() / 1000 }]
+            // Once the assistant has replied, the planner log is stale.
+            plannerLog = []
+            stallHint = null
           }
+          break
+        case 'planner_event': {
+          // Surface the planner's tool calls + thinking text as short
+          // human-readable lines. Caps the log at 20 entries.
+          let line: string | null = null
+          if (ev.kind === 'tool/use' && ev.tool_name) {
+            const ti = ev.tool_input ?? {}
+            const arg =
+              (ti.path as string | undefined) ||
+              (ti.file_path as string | undefined) ||
+              (ti.pattern as string | undefined) ||
+              (ti.command as string | undefined) ||
+              ''
+            line = arg ? `${ev.tool_name}  ${String(arg).slice(0, 90)}` : ev.tool_name
+          } else if (ev.kind === 'text/delta' && ev.text) {
+            const trimmed = ev.text.trim()
+            if (trimmed) line = '✎ ' + trimmed.slice(0, 100)
+          }
+          if (line) {
+            plannerLog = [...plannerLog, line].slice(-20)
+          }
+          break
+        }
+        case 'orchestrator_stall_hint':
+          stallHint = ev.hint ?? 'Still working…'
           break
         case 'spawn_complete':
           updateStatus('running')
@@ -162,6 +212,13 @@ export const useSessions = create<State & Actions>((set, get) => ({
         case 'awaiting_user':
           updateStatus('awaiting_user')
           interrupt = null
+          // The planner log is a per-turn artifact. Clear it here too
+          // (in addition to `orchestrator_response`) because the backend
+          // sometimes jumps straight to awaiting_user without an
+          // explicit assistant response — leaving stale planner cards
+          // floating above the user's next prompt.
+          plannerLog = []
+          stallHint = null
           if (ev.last_response) {
             // assistant message may already have been pushed via orchestrator_response;
             // skip duplicates (last entry is the same content)
@@ -176,6 +233,26 @@ export const useSessions = create<State & Actions>((set, get) => ({
             updateStatus('waiting_approval')
             interrupt = ev.payload
           }
+          break
+        case 'interrupt_resolved':
+          // The matching /approve POST already cleared `interrupt` in
+          // the Chat optimistic path. This case handles the WS replay
+          // after a reconnect: when the original `interrupt` event is
+          // re-emitted from the ring buffer, the resolved marker
+          // immediately follows it and dismisses the card again.
+          interrupt = null
+          break
+        case 'session_cancelled':
+          // Cancelled is its own status — using 'failed' renders the
+          // system message in a red error bubble and triggers Composer
+          // disabled-for-failed paths, both of which are wrong for a
+          // user-initiated cancel.
+          updateStatus('cancelled')
+          interrupt = null
+          history = [
+            ...history,
+            { role: 'system', content: 'Cancelled by user.', ts: Date.now() / 1000 },
+          ]
           break
         case 'session_closed':
         case 'session_end':
@@ -237,7 +314,7 @@ export const useSessions = create<State & Actions>((set, get) => ({
       return {
         sessions: {
           ...s.sessions,
-          [sessionId]: { info, agents, history, interrupt, team, activity, events },
+          [sessionId]: { info, agents, history, interrupt, team, activity, events, plannerLog, stallHint, totalCostUsd },
         },
       }
     })
@@ -253,5 +330,8 @@ function blankProject(info: SessionInfo): ProjectState {
     team: null,
     activity: {},
     events: [],
+    plannerLog: [],
+    stallHint: null,
+    totalCostUsd: 0,
   }
 }

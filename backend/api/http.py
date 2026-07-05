@@ -27,10 +27,14 @@ from backend.orchestrator.graph import (
     run_session,
 )
 from backend.persistence.events import (
+    create_pending_approval,
     create_session as db_create_session,
+    get_pending_approval,
     get_session,
     list_agents,
+    list_pending_approvals,
     list_sessions,
+    resolve_pending_approval,
     update_session_status,
 )
 
@@ -38,10 +42,38 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
 
 # In-memory per-session state (lost on restart — sessions persist in SQLite)
+# `_pending_approvals` is keyed by correlation_id (NOT session_id) — a single
+# session can have multiple approvals in flight (invariant #5). The mirror
+# `_session_to_corr_ids` indexes session → set of corr_ids so cancel/close
+# can release every waiter for that session in one pass.
 _pending_approvals: dict[str, asyncio.Future] = {}
+_session_to_corr_ids: dict[str, set[str]] = {}
 _pending_inputs: dict[str, asyncio.Future] = {}
 _running_tasks: dict[str, asyncio.Task] = {}
 _message_queues: dict[str, deque[str]] = {}
+# Session ids for which /close was requested while the runner was not
+# parked. The runner checks this on every loop iteration so the close
+# happens cleanly at the next safe point instead of leaving the runner
+# emitting events on a session the UI already considers closed.
+_close_requested_sessions: set[str] = set()
+
+
+def _register_approval(correlation_id: str, session_id: str, future: asyncio.Future) -> None:
+    _pending_approvals[correlation_id] = future
+    _session_to_corr_ids.setdefault(session_id, set()).add(correlation_id)
+
+
+def _unregister_approval(correlation_id: str, session_id: str) -> None:
+    _pending_approvals.pop(correlation_id, None)
+    bucket = _session_to_corr_ids.get(session_id)
+    if bucket is not None:
+        bucket.discard(correlation_id)
+        if not bucket:
+            _session_to_corr_ids.pop(session_id, None)
+
+
+def _session_corr_ids(session_id: str) -> list[str]:
+    return list(_session_to_corr_ids.get(session_id, ()))
 
 
 def _get_queue(session_id: str) -> deque[str]:
@@ -102,6 +134,14 @@ async def _session_runner(
 
     heartbeat = asyncio.create_task(_orchestrator_heartbeat())
 
+    # `user_close_requested` is set ONLY by /close (or /cancel). The
+    # _session_runner uses this to decide whether a normal loop exit
+    # means "the user genuinely closed the project" or "the graph
+    # reached END unexpectedly". Without this guard, every successful
+    # turn that mistakenly fell through to END would silently close
+    # the session — user saw "project closed itself" on a finished
+    # snake/tetris build.
+    close_requested = False
     try:
         result = await run_session(
             session_id=session_id,
@@ -114,26 +154,51 @@ async def _session_runner(
         )
 
         while isinstance(result, SessionInterrupt):
+            # If /close was POSTed while we were mid-execution, honour it
+            # here at the next safe parking point instead of letting the
+            # runner keep emitting events on an already-closed session.
+            if session_id in _close_requested_sessions:
+                close_requested = True
+                break
             payload = result.payload
             payload_type = payload.get("type")
             resume_value: dict | None = None
 
             if payload_type == "team_approval":
+                correlation_id = uuid.uuid4().hex
+                # Persist BEFORE awaiting — a backend restart at this point
+                # must be able to replay the interrupt to reconnecting
+                # clients (invariant #5). Without this row, the runner's
+                # await is the only record this approval was ever requested.
+                await create_pending_approval(
+                    correlation_id=correlation_id,
+                    session_id=session_id,
+                    agent_id=agent_id,
+                    request_payload=payload,
+                )
+                # Stamp the correlation_id into the WS payload so the UI
+                # carries it back on POST /approve. The dict is mutated
+                # in place — payload is shaped by the orchestrator and
+                # not referenced again here.
+                payload = {**payload, "correlation_id": correlation_id}
                 await event_bus.emit(session_id, {
                     "type": "interrupt",
                     "session_id": session_id,
+                    "correlation_id": correlation_id,
                     "payload": payload,
                 })
                 try:
                     from backend.telegram.notifier import notify_approval
-                    await notify_approval(session_id, payload)
+                    await notify_approval(session_id, payload, correlation_id=correlation_id)
                 except Exception as exc:
                     logger.debug("Telegram approval notify skipped: %s", exc)
                 loop = asyncio.get_event_loop()
                 future: asyncio.Future = loop.create_future()
-                _pending_approvals[session_id] = future
-                resume_value = await future
-                _pending_approvals.pop(session_id, None)
+                _register_approval(correlation_id, session_id, future)
+                try:
+                    resume_value = await future
+                finally:
+                    _unregister_approval(correlation_id, session_id)
 
             elif payload_type == "awaiting_input":
                 # If a message was queued while agents were running, use it now.
@@ -144,8 +209,20 @@ async def _session_runner(
                     loop = asyncio.get_event_loop()
                     future = loop.create_future()
                     _pending_inputs[session_id] = future
-                    resume_value = await future
-                    _pending_inputs.pop(session_id, None)
+                    try:
+                        resume_value = await future
+                    finally:
+                        # try/finally so a cancel/exception during await
+                        # doesn't leave a stale entry in _pending_inputs
+                        # that a later /message or /cancel would then
+                        # misinterpret as a still-live waiter.
+                        _pending_inputs.pop(session_id, None)
+
+                # /close routes through here with resume_value={"close": True}.
+                # Mark the runner so the natural loop exit below is treated
+                # as a clean close rather than an unexpected END.
+                if isinstance(resume_value, dict) and resume_value.get("close"):
+                    close_requested = True
 
             else:
                 logger.warning("Unknown interrupt payload type %r — ending session", payload_type)
@@ -153,12 +230,28 @@ async def _session_runner(
 
             result = await resume_session_with_value(session_id, resume_value)
 
-        # Graph reached END — happens when the user closes the project.
-        await event_bus.emit(session_id, {
-            "type": "session_end",
-            "session_id": session_id,
-            "status": "closed",
-        })
+        if close_requested:
+            await event_bus.emit(session_id, {
+                "type": "session_end",
+                "session_id": session_id,
+                "status": "closed",
+            })
+        else:
+            # Graph reached END without the user closing. Most likely a
+            # graph routing bug (e.g. user_closed state lingering from a
+            # prior turn). Log loudly and do NOT close the project — the
+            # user wants it to stay open for follow-ups. Tell the UI
+            # we're idle so the spinner clears, but keep status active.
+            logger.warning(
+                "Session %s graph hit END without /close — leaving session active so "
+                "the user can keep working.",
+                session_id,
+            )
+            await event_bus.emit(session_id, {
+                "type": "awaiting_user",
+                "session_id": session_id,
+                "last_response": "",
+            })
 
     except Exception as exc:
         logger.exception("Session %s runner failed", session_id)
@@ -175,7 +268,15 @@ async def _session_runner(
         heartbeat.cancel()
         _running_tasks.pop(session_id, None)
         _message_queues.pop(session_id, None)
-        _pending_approvals.pop(session_id, None)
+        _close_requested_sessions.discard(session_id)
+        for corr_id in _session_corr_ids(session_id):
+            _unregister_approval(corr_id, session_id)
+            # Mark the DB row expired so restart recovery doesn't replay
+            # an interrupt for a session that is no longer running.
+            try:
+                await resolve_pending_approval(corr_id, status="expired")
+            except Exception as exc:
+                logger.warning("Could not mark approval %s expired: %s", corr_id, exc)
         _pending_inputs.pop(session_id, None)
 
 
@@ -397,14 +498,83 @@ async def get_session_history(session_id: str) -> dict:
 
 @router.post("/sessions/{session_id}/approve")
 async def approve_session(session_id: str, req: ApproveRequest) -> dict:
-    future = _pending_approvals.get(session_id)
-    if not future:
-        raise HTTPException(status_code=404, detail="No pending approval for this session")
+    correlation_id = req.correlation_id
+    if correlation_id is None:
+        # Transitional: legacy clients didn't send a correlation_id. If
+        # the session has exactly one in-flight approval, use it. If
+        # there are 0 or >1, refuse — silently picking the "first" would
+        # let two concurrent approvals clobber each other.
+        corr_ids = _session_corr_ids(session_id)
+        if len(corr_ids) == 1:
+            correlation_id = corr_ids[0]
+        elif not corr_ids:
+            raise HTTPException(
+                status_code=404,
+                detail="No pending approval for this session",
+            )
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{len(corr_ids)} pending approvals for this session — "
+                    "include correlation_id in the request body."
+                ),
+            )
+
+    future = _pending_approvals.get(correlation_id)
+    if future is None or future.done():
+        raise HTTPException(
+            status_code=404,
+            detail=f"No live waiter for correlation_id {correlation_id!r}",
+        )
+
     resume_value: dict = {"approved": req.approved}
     if req.team_composition:
         resume_value["team_composition"] = req.team_composition
+
+    persisted = await resolve_pending_approval(
+        correlation_id,
+        status="approved" if req.approved else "rejected",
+        response_payload=resume_value,
+    )
+    if not persisted:
+        # Lost a race against another caller (or the runner's expire-on-
+        # close path). The future is already done by now in the first
+        # case, so the check above will normally have caught it.
+        raise HTTPException(
+            status_code=409,
+            detail=f"Approval {correlation_id!r} was already resolved",
+        )
+
     future.set_result(resume_value)
-    return {"ok": True}
+    # Defence-in-depth: the runner's own `finally:` will also unregister
+    # this entry when its `await future` returns. Clearing here keeps the
+    # in-memory map consistent even when callers manipulate it directly
+    # (tests, Telegram callbacks that race against the runner exit).
+    _unregister_approval(correlation_id, session_id)
+    # Tell every connected WS client (and the ring buffer, which the
+    # resume handshake replays) that the interrupt was consumed —
+    # otherwise the approval card would pop right back when the
+    # WebSocket reconnected and replayed the original interrupt event.
+    await event_bus.emit(session_id, {
+        "type": "interrupt_resolved",
+        "session_id": session_id,
+        "correlation_id": correlation_id,
+        "approved": req.approved,
+    })
+    return {"ok": True, "correlation_id": correlation_id}
+
+
+@router.get("/sessions/{session_id}/approvals")
+async def list_session_approvals(session_id: str) -> dict:
+    """Return every pending approval for this session.
+
+    Used by clients reconnecting after a backend restart: when a session
+    is re-opened, the client calls this to discover any approvals that
+    were persisted but whose original WS interrupt event was missed.
+    """
+    rows = await list_pending_approvals(session_id=session_id)
+    return {"session_id": session_id, "approvals": rows}
 
 
 @router.post("/sessions/{session_id}/message")
@@ -449,11 +619,104 @@ async def close_session(session_id: str) -> dict:
         _pending_inputs.pop(session_id, None)
         return {"ok": True, "status": "closing"}
 
-    # Session isn't parked at wait_for_user — mark closed and let the runner
-    # exit on its own. Any in-flight agents will finish.
+    # Runner is alive but not parked. Defer the close — the runner picks
+    # this flag up at the next interrupt boundary, so we don't mark the
+    # session 'closed' while it's still emitting events (which used to
+    # confuse the UI). If the runner has already exited (no task entry),
+    # we can mark closed immediately.
+    if session_id in _running_tasks:
+        _close_requested_sessions.add(session_id)
+        return {"ok": True, "status": "closing"}
+
     await update_session_status(session_id, "closed")
     await event_bus.emit(session_id, {
         "type": "session_closed",
         "session_id": session_id,
     })
     return {"ok": True, "status": "closed"}
+
+
+@router.post("/sessions/{session_id}/cancel")
+async def cancel_session(session_id: str) -> dict:
+    """Stop a running orchestration mid-flight.
+
+    Cancels the asyncio task driving the session, which:
+      - cascades CancelledError into ClaudeCLIWorker.run
+      - which catches it, calls kill() on the agent process group
+      - which terminates any in-flight builder/reviewer subprocesses
+      - and bubbles back to _session_runner's `except` branch, which
+        emits session_error to the WebSocket so the UI clears the
+        spinner.
+
+    Different from /close: close politely waits for the current
+    orchestrator turn to park. /cancel pulls the plug. Use when you
+    realise you sent a wrong task and the agent is barrelling ahead.
+    """
+    task = _running_tasks.get(session_id)
+    if task is None:
+        # Nothing live — try to gracefully release any parked future.
+        future = _pending_inputs.get(session_id)
+        if future and not future.done():
+            future.set_result({"close": True})
+            _pending_inputs.pop(session_id, None)
+        await update_session_status(session_id, "closed")
+        await event_bus.emit(session_id, {
+            "type": "session_closed",
+            "session_id": session_id,
+            "reason": "cancelled (no live task)",
+        })
+        return {"ok": True, "status": "closed"}
+
+    # If the runner is parked at awaiting_input, take the clean shutdown
+    # path: resolve the future with close=True so the runner exits via
+    # its existing close_requested branch (emitting session_end) instead
+    # of crashing into `except Exception` with a CancelledError. Then we
+    # still emit session_cancelled so the UI knows it was a cancel, not
+    # a graceful close.
+    pi = _pending_inputs.get(session_id)
+    parked_at_input = pi is not None and not pi.done()
+    if parked_at_input:
+        pi.set_result({"close": True})  # type: ignore[union-attr]
+        _pending_inputs.pop(session_id, None)
+
+    # Release any parked approval futures — these have to be force-
+    # cancelled since there is no "close" semantic on an approval. The
+    # runner's finally already marks rows expired; we mirror it here so
+    # an immediate restart sees a consistent DB.
+    for corr_id in _session_corr_ids(session_id):
+        f = _pending_approvals.get(corr_id)
+        if f and not f.done():
+            f.cancel()
+        _unregister_approval(corr_id, session_id)
+        try:
+            await resolve_pending_approval(corr_id, status="expired")
+        except Exception as exc:
+            logger.warning("Could not mark approval %s expired on cancel: %s", corr_id, exc)
+
+    if parked_at_input:
+        # Parked path: the runner is now winding down on its own. No
+        # need to .cancel() — let it emit session_end naturally, then
+        # we emit session_cancelled below so the UI can route the
+        # status. Wait briefly for the runner to exit so callers don't
+        # race a follow-up POST against the still-cleaning state.
+        try:
+            await asyncio.wait_for(task, timeout=2.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            pass
+    else:
+        # Runner is doing real work — propagate cancellation so the
+        # worker's CancelledError handler can SIGTERM/SIGKILL the
+        # subprocess via process group. Wait (bounded) so the HTTP
+        # response only returns after the subprocess is gone.
+        task.cancel()
+        try:
+            await asyncio.wait_for(task, timeout=2.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            pass
+
+    await event_bus.emit(session_id, {
+        "type": "session_cancelled",
+        "session_id": session_id,
+    })
+    await update_session_status(session_id, "closed")
+    return {"ok": True, "status": "cancelled"}

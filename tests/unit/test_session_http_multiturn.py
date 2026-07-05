@@ -25,6 +25,7 @@ def client():
         yield c
     # Reset module-level state between tests
     http_mod._pending_approvals.clear()
+    http_mod._session_to_corr_ids.clear()
     http_mod._pending_inputs.clear()
     http_mod._running_tasks.clear()
     http_mod._message_queues.clear()
@@ -121,3 +122,176 @@ def test_history_unknown_session_404(client: TestClient) -> None:
                new_callable=AsyncMock, return_value=None):
         resp = client.get("/api/sessions/missing/history")
     assert resp.status_code == 404
+
+
+# ── Approval correlation IDs (invariant #5) ─────────────────────────────
+
+
+def _set_resolve_no_op() -> None:
+    """resolve_pending_approval reads/writes SQLite; patch out for the
+    pure-in-memory approve_session tests below."""
+
+
+def test_approve_with_correlation_id_resolves_waiter(client: TestClient) -> None:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        future: asyncio.Future = loop.create_future()
+        http_mod._register_approval("corr-a", "s1", future)
+
+        with patch("backend.api.http.resolve_pending_approval",
+                   new_callable=AsyncMock, return_value=True):
+            resp = client.post(
+                "/api/sessions/s1/approve",
+                json={"approved": True, "correlation_id": "corr-a"},
+            )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["correlation_id"] == "corr-a"
+        assert future.done()
+        assert future.result() == {"approved": True}
+        assert "corr-a" not in http_mod._pending_approvals
+    finally:
+        loop.close()
+
+
+def test_approve_without_correlation_id_falls_back_when_single(client: TestClient) -> None:
+    """Legacy client compatibility: if exactly one approval is pending for
+    the session, the backend infers the correlation_id."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        future: asyncio.Future = loop.create_future()
+        http_mod._register_approval("only-one", "s1", future)
+
+        with patch("backend.api.http.resolve_pending_approval",
+                   new_callable=AsyncMock, return_value=True):
+            resp = client.post("/api/sessions/s1/approve", json={"approved": False})
+
+        assert resp.status_code == 200
+        assert resp.json()["correlation_id"] == "only-one"
+        assert future.done()
+    finally:
+        loop.close()
+
+
+def test_approve_without_correlation_id_refuses_when_ambiguous(client: TestClient) -> None:
+    """Two parallel approvals for one session — legacy clients can't pick
+    one safely, so the backend must refuse rather than guess."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        f1 = loop.create_future()
+        f2 = loop.create_future()
+        http_mod._register_approval("corr-1", "s1", f1)
+        http_mod._register_approval("corr-2", "s1", f2)
+
+        resp = client.post("/api/sessions/s1/approve", json={"approved": True})
+        assert resp.status_code == 400
+        assert "correlation_id" in resp.json()["detail"]
+        assert not f1.done()
+        assert not f2.done()
+    finally:
+        loop.close()
+
+
+def test_approve_unknown_correlation_id_returns_404(client: TestClient) -> None:
+    resp = client.post(
+        "/api/sessions/whatever/approve",
+        json={"approved": True, "correlation_id": "ghost"},
+    )
+    assert resp.status_code == 404
+
+
+def test_parallel_approvals_resolve_independently(client: TestClient) -> None:
+    """Two concurrent team_approval interrupts for one session must each
+    have their own correlation_id and resolve independently."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        f1: asyncio.Future = loop.create_future()
+        f2: asyncio.Future = loop.create_future()
+        http_mod._register_approval("ca", "sX", f1)
+        http_mod._register_approval("cb", "sX", f2)
+
+        with patch("backend.api.http.resolve_pending_approval",
+                   new_callable=AsyncMock, return_value=True):
+            r1 = client.post(
+                "/api/sessions/sX/approve",
+                json={"approved": True, "correlation_id": "ca"},
+            )
+            assert r1.status_code == 200
+            assert f1.done() and f1.result() == {"approved": True}
+            assert not f2.done(), "second approval must remain in flight"
+
+            r2 = client.post(
+                "/api/sessions/sX/approve",
+                json={"approved": False, "correlation_id": "cb"},
+            )
+            assert r2.status_code == 200
+            assert f2.done() and f2.result() == {"approved": False}
+    finally:
+        loop.close()
+
+
+def test_unregister_clears_session_index(client: TestClient) -> None:
+    """_unregister_approval cleans up both maps so no stale state leaks."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        f1 = loop.create_future()
+        http_mod._register_approval("only", "sY", f1)
+        assert http_mod._session_corr_ids("sY") == ["only"]
+
+        http_mod._unregister_approval("only", "sY")
+        assert "only" not in http_mod._pending_approvals
+        assert http_mod._session_corr_ids("sY") == []
+        assert "sY" not in http_mod._session_to_corr_ids
+    finally:
+        loop.close()
+
+
+# ── /cancel never crashes the parked-at-input session ─────────────────────
+
+
+def test_cancel_resolves_pending_input_with_close_not_cancel(client: TestClient) -> None:
+    """When the runner is parked at awaiting_input, /cancel must resolve
+    the pending input future cleanly (close=True) rather than future.cancel()
+    — which would raise CancelledError out of the await and force the runner
+    into its `except Exception` branch, emitting session_error instead of
+    session_cancelled."""
+    from unittest.mock import MagicMock
+
+    # Stand-ins for the loop-bound objects. cancel_session reads the
+    # future via _pending_inputs.get() and the task via _running_tasks.get();
+    # we replace both with simple mocks that record interactions.
+    pi = MagicMock()
+    pi.done.return_value = False
+    captured: dict = {}
+    pi.set_result.side_effect = lambda v: captured.setdefault("resume_value", v)
+    http_mod._pending_inputs["scan"] = pi
+
+    task = MagicMock()
+    task.cancel = MagicMock()
+    http_mod._running_tasks["scan"] = task
+
+    async def _instant_wait(_aw, timeout=None):  # noqa: ARG001
+        return None
+
+    with patch("backend.api.http.update_session_status",
+               new_callable=AsyncMock, return_value=None), \
+         patch("backend.api.http.asyncio.wait_for", new=_instant_wait):
+        resp = client.post("/api/sessions/scan/cancel")
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "cancelled"
+    # Critical: set_result was called (clean close) — pi.cancel must NOT
+    # have been called, otherwise the runner crashes with CancelledError.
+    pi.set_result.assert_called_once()
+    pi.cancel.assert_not_called()
+    assert captured["resume_value"] == {"close": True}
+    # task.cancel must NOT have been called either when we took the
+    # parked path — the runner is unwinding on its own.
+    task.cancel.assert_not_called()

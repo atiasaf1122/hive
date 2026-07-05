@@ -10,8 +10,10 @@
  * Auto-scrolls to bottom on new content.
  */
 import { IconCheck, IconHexagon, IconLoader2, IconUser } from '@tabler/icons-react'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../../lib/api'
+import { toast } from '../../lib/toast'
+import { useSessions } from '../../stores/sessions'
 import type {
   ConversationEntry,
   InterruptPayload,
@@ -25,14 +27,16 @@ interface ChatProps {
   team: TeamComposition | null
   agents: AgentInfo[]
   interrupt: InterruptPayload | null
+  plannerLog?: string[]
+  stallHint?: string | null
 }
 
-export function Chat({ sessionId, history, team, agents, interrupt }: ChatProps) {
+export function Chat({ sessionId, history, team, agents, interrupt, plannerLog, stallHint }: ChatProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
-  }, [history.length, agents.length, interrupt?.type])
+  }, [history.length, agents.length, interrupt?.type, plannerLog?.length])
 
   return (
     <div ref={scrollRef} className="flex-1 overflow-y-auto">
@@ -47,6 +51,13 @@ export function Chat({ sessionId, history, team, agents, interrupt }: ChatProps)
           <Bubble key={i} entry={m} />
         ))}
 
+        {/* Live planner activity — shown while the orchestrator is mid-turn
+            so the user sees what it's reading / thinking instead of a
+            frozen spinner. */}
+        {plannerLog && plannerLog.length > 0 && (
+          <PlannerActivity log={plannerLog} stallHint={stallHint ?? null} />
+        )}
+
         {/* Inline activity card — shown once we know a team has been planned */}
         {team && team.team.length > 0 && (
           <ActivityCard team={team} agents={agents} />
@@ -55,6 +66,33 @@ export function Chat({ sessionId, history, team, agents, interrupt }: ChatProps)
         {/* Inline approval card */}
         {interrupt?.type === 'team_approval' && (
           <ApprovalCard sessionId={sessionId} payload={interrupt} />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function PlannerActivity({ log, stallHint }: { log: string[]; stallHint: string | null }) {
+  return (
+    <div className="flex items-start gap-3">
+      <div className="w-8 h-8 rounded-full bg-surface-2 text-ink-muted flex items-center justify-center shrink-0 mt-0.5">
+        <IconLoader2 size={16} strokeWidth={1.75} className="animate-spin" />
+      </div>
+      <div className="card flex-1 p-3 border-dashed">
+        <div className="text-[11px] uppercase tracking-wider text-ink-faint mb-2">
+          orchestrator activity
+        </div>
+        <ul className="space-y-1 font-mono text-[12px] text-ink-muted leading-snug max-h-48 overflow-y-auto">
+          {log.map((line, i) => (
+            <li key={i} className="truncate" title={line}>
+              {line}
+            </li>
+          ))}
+        </ul>
+        {stallHint && (
+          <div className="mt-2 text-[11px] text-amber-600 dark:text-amber-300">
+            {stallHint}
+          </div>
         )}
       </div>
     </div>
@@ -131,14 +169,48 @@ function ActivityCard({ team, agents }: { team: TeamComposition; agents: AgentIn
 function ApprovalCard({ sessionId, payload }: { sessionId: string; payload: InterruptPayload }) {
   const comp = payload.team_composition
   const confidence = payload.confidence ?? 1
+  // Local "submitted" state — once the user clicks, hide the card
+  // immediately rather than waiting for the WS round-trip. The backend
+  // will follow up with spawn_complete / awaiting_user; if it fails,
+  // the next render shows whatever state landed.
+  const [submitted, setSubmitted] = useState<'approved' | 'rejected' | null>(null)
 
   async function respond(approved: boolean) {
+    // Capture the interrupt payload BEFORE the optimistic clear so we
+    // can restore it on error. Without this, the card unmounts on the
+    // optimistic store mutation and `setSubmitted(null)` runs on a
+    // dead component — the user gets no feedback that /approve failed.
+    const prevInterrupt = payload
+    setSubmitted(approved ? 'approved' : 'rejected')
+    useSessions.setState((s) => {
+      const proj = s.sessions[sessionId]
+      if (!proj || !proj.interrupt) return s
+      return {
+        sessions: { ...s.sessions, [sessionId]: { ...proj, interrupt: null } },
+      }
+    })
     try {
-      await api.post(`/api/sessions/${sessionId}/approve`, { approved })
+      // correlation_id is required when more than one approval is in
+      // flight for the same session (invariant #5). Sending it always
+      // — even when only one is pending — costs nothing and keeps the
+      // backend's "ambiguous fallback" branch out of the hot path.
+      await api.post(`/api/sessions/${sessionId}/approve`, {
+        approved,
+        correlation_id: payload.correlation_id,
+      })
     } catch (err) {
       console.error('approval failed', err)
+      // Restore the interrupt so the card reappears and the user can
+      // retry. Also toast — the chat re-render alone is too quiet a
+      // signal for a network failure.
+      useSessions.getState().setInterrupt(sessionId, prevInterrupt)
+      toast.error(
+        `Approval didn't go through: ${err instanceof Error ? err.message : 'unknown error'}. Try again.`,
+      )
     }
   }
+
+  if (submitted) return null
 
   return (
     <div className="flex items-start gap-3">

@@ -52,9 +52,13 @@ def test_parse_composition_with_markdown_fence():
 
 
 def test_parse_invalid_json_returns_fallback():
+    """The fallback team's confidence must stay above the 0.7 approval
+    threshold — a low value caused full-auto sessions to silently park
+    at an approval gate every time the planner had a transient failure
+    (observed dogfooding on a real fire-detection task)."""
     comp = _parse_team_composition("this is not json at all")
     assert comp.team[0].role == "Builder"
-    assert comp.confidence == 0.5
+    assert comp.confidence >= 0.7
 
 
 def test_parse_empty_team_returns_fallback():

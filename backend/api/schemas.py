@@ -20,6 +20,12 @@ class CreateSessionResponse(BaseModel):
 class ApproveRequest(BaseModel):
     approved: bool
     team_composition: dict | None = None
+    # correlation_id identifies the specific interrupt — multiple approvals
+    # can be in flight for one session (invariant #5). Optional only for
+    # transitional UI clients that haven't yet been updated; new code MUST
+    # send it. When missing, the backend falls back to the session's single
+    # latest pending approval if exactly one exists, else 400.
+    correlation_id: str | None = None
 
 
 class MessageRequest(BaseModel):

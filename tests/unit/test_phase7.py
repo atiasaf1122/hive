@@ -155,16 +155,18 @@ def test_approval_keyboard_has_three_buttons() -> None:
 
 @pytest.mark.asyncio
 async def test_callback_approve_resolves_pending_future() -> None:
+    """Telegram approve callback now resolves by correlation_id, not session_id."""
     from backend.api import http as http_mod
     from backend.telegram.handlers.callbacks import on_approve
 
     http_mod._pending_approvals.clear()
+    http_mod._session_to_corr_ids.clear()
     loop = asyncio.get_running_loop()
     future: asyncio.Future = loop.create_future()
-    http_mod._pending_approvals["sess-cb"] = future
+    http_mod._register_approval("corr-cb", "sess-cb", future)
 
     query = MagicMock()
-    query.data = f"{APPROVE_PREFIX}sess-cb"
+    query.data = f"{APPROVE_PREFIX}corr-cb"
     query.message = MagicMock()
     query.message.chat = MagicMock()
     query.message.chat.id = 42
@@ -173,12 +175,17 @@ async def test_callback_approve_resolves_pending_future() -> None:
     query.answer = AsyncMock()
 
     with patch("backend.telegram.handlers.callbacks.load_config",
-               return_value=TelegramConfig(token="t", allowed_chat_ids=[42])):
+               return_value=TelegramConfig(token="t", allowed_chat_ids=[42])), \
+         patch("backend.persistence.events.get_pending_approval",
+               new_callable=AsyncMock, return_value={"session_id": "sess-cb"}), \
+         patch("backend.persistence.events.resolve_pending_approval",
+               new_callable=AsyncMock, return_value=True):
         await on_approve(query)
 
     assert future.done()
     assert future.result() == {"approved": True}
     query.answer.assert_awaited_once_with("✓ Approved")
+    assert "corr-cb" not in http_mod._pending_approvals
 
 
 @pytest.mark.asyncio
@@ -187,12 +194,13 @@ async def test_callback_reject_resolves_pending_future() -> None:
     from backend.telegram.handlers.callbacks import on_reject
 
     http_mod._pending_approvals.clear()
+    http_mod._session_to_corr_ids.clear()
     loop = asyncio.get_running_loop()
     future: asyncio.Future = loop.create_future()
-    http_mod._pending_approvals["sess-rej"] = future
+    http_mod._register_approval("corr-rej", "sess-rej", future)
 
     query = MagicMock()
-    query.data = f"{REJECT_PREFIX}sess-rej"
+    query.data = f"{REJECT_PREFIX}corr-rej"
     query.message = MagicMock()
     query.message.chat = MagicMock()
     query.message.chat.id = 42
@@ -201,7 +209,11 @@ async def test_callback_reject_resolves_pending_future() -> None:
     query.answer = AsyncMock()
 
     with patch("backend.telegram.handlers.callbacks.load_config",
-               return_value=TelegramConfig(token="t", allowed_chat_ids=[42])):
+               return_value=TelegramConfig(token="t", allowed_chat_ids=[42])), \
+         patch("backend.persistence.events.get_pending_approval",
+               new_callable=AsyncMock, return_value={"session_id": "sess-rej"}), \
+         patch("backend.persistence.events.resolve_pending_approval",
+               new_callable=AsyncMock, return_value=True):
         await on_reject(query)
 
     assert future.result() == {"approved": False}
@@ -283,7 +295,7 @@ async def test_notify_approval_sends_to_subscribers_only(tmp_path: Path) -> None
         delivered = await notifier.notify_approval("sess-n", {
             "team_composition": {"team": [], "confidence": 0.9, "rationale": ""},
             "confidence": 0.9, "reason": "approval_mode",
-        })
+        }, correlation_id="corr-n")
 
     assert delivered == 1
     fake_bot.send_message.assert_awaited_once()
@@ -305,7 +317,7 @@ async def test_notify_approval_falls_back_to_allowlist_when_no_subscribers() -> 
         delivered = await notifier.notify_approval("sess-broadcast", {
             "team_composition": {"team": [], "confidence": 0.9, "rationale": ""},
             "confidence": 0.9, "reason": "approval_mode",
-        })
+        }, correlation_id="corr-bc")
 
     assert delivered == 2
 

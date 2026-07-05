@@ -30,13 +30,16 @@ import {
 import { SafetyPanel } from '../components/settings/SafetyPanel'
 import { SecurityPanel } from '../components/settings/SecurityPanel'
 
+/** `costly` worker picks trigger a confirm() prompt — HIVE invariant #7
+ *  reserves Opus for Orchestrator + Reviewer, but power users may still
+ *  want Opus on a hard one-off task. We don't hide the option, only warn. */
 const MODEL_CHOICES = [
-  { value: 'claude:opus', label: 'Claude Opus', tier: 'premium' },
-  { value: 'claude:sonnet', label: 'Claude Sonnet', tier: 'standard' },
-  { value: 'claude:haiku', label: 'Claude Haiku', tier: 'cheap' },
-  { value: 'ollama:llama3.1', label: 'Ollama · Llama 3.1', tier: 'local' },
-  { value: 'ollama:qwen2.5', label: 'Ollama · Qwen 2.5', tier: 'local' },
-]
+  { value: 'claude:opus',    label: 'Claude Opus',          tier: 'premium',  costlyAsWorker: true  },
+  { value: 'claude:sonnet',  label: 'Claude Sonnet',        tier: 'standard', costlyAsWorker: false },
+  { value: 'claude:haiku',   label: 'Claude Haiku',         tier: 'cheap',    costlyAsWorker: false },
+  { value: 'ollama:llama3.1', label: 'Ollama · Llama 3.1',  tier: 'local',    costlyAsWorker: false },
+  { value: 'ollama:qwen2.5', label: 'Ollama · Qwen 2.5',    tier: 'local',    costlyAsWorker: false },
+] as const
 
 const ROUTING_OPTIONS: { value: RoutingStrategy; label: string; hint: string }[] = [
   { value: 'cloud-first', label: 'Cloud first',  hint: 'Prefer Claude for everything. Ollama as fallback.' },
@@ -228,6 +231,7 @@ function AIPanel() {
           <ModelSelect
             value={s.workerModel}
             onChange={(v) => s.update({ workerModel: v })}
+            kind="worker"
           />
         </SettingRow>
 
@@ -260,16 +264,38 @@ function AIPanel() {
   )
 }
 
-function ModelSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+function ModelSelect({
+  value,
+  onChange,
+  kind = 'orchestrator',
+}: {
+  value: string
+  onChange: (v: string) => void
+  /** 'worker' adds a (costly) badge to Opus and confirms the pick. */
+  kind?: 'orchestrator' | 'worker'
+}) {
+  function handleChange(next: string) {
+    if (kind === 'worker') {
+      const choice = MODEL_CHOICES.find((m) => m.value === next)
+      if (choice?.costlyAsWorker) {
+        const ok = window.confirm(
+          `${choice.label} is intended for the Orchestrator + Reviewer only — running it as a worker is significantly more expensive. Use it anyway?`,
+        )
+        if (!ok) return
+      }
+    }
+    onChange(next)
+  }
+
   return (
     <select
       value={value}
-      onChange={(e) => onChange(e.target.value)}
+      onChange={(e) => handleChange(e.target.value)}
       className="input-soft text-sm"
     >
       {MODEL_CHOICES.map((m) => (
         <option key={m.value} value={m.value}>
-          {m.label} ({m.tier})
+          {m.label} ({m.tier}{kind === 'worker' && m.costlyAsWorker ? ' · costly' : ''})
         </option>
       ))}
     </select>

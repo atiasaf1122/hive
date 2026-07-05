@@ -47,7 +47,149 @@ def client():
 
 
 @pytest.mark.asyncio
-async def test_planner_runs_at_tmp_regardless_of_project_path(tmp_path) -> None:
+async def test_planner_sends_allowed_tools_whitelist() -> None:
+    """Planner must restrict tool access to read-only. Without this Claude
+    silently builds the project at cwd=/tmp and never spawns a worker."""
+    from backend.orchestrator.nodes import planner as planner_mod
+
+    captured: dict = {}
+
+    async def stub_run(self, prompt, config):
+        captured["allowed_tools"] = config.allowed_tools
+        yield HiveEvent(
+            type=EventType.AGENT_END,
+            agent_id=config.agent_id, session_id=config.session_id,
+        )
+
+    with patch.object(planner_mod.ClaudeCLIWorker, "run", stub_run):
+        await planner_mod.orchestrate(message="hi", session_id="s-tools")
+
+    tools = captured["allowed_tools"]
+    assert tools is not None, "planner must declare an allowed_tools list"
+    # Read access — yes; Write/Edit/Bash — no.
+    assert "Read" in tools
+    assert "Write" not in tools
+    assert "Edit" not in tools
+    assert "Bash" not in tools
+
+
+@pytest.mark.asyncio
+async def test_claude_cli_passes_allowed_tools_to_subprocess(monkeypatch) -> None:
+    """The whitelist actually lands as --allowed-tools on the CLI argv."""
+    from backend.workers.base import WorkerConfig
+    from backend.workers.claude_cli import ClaudeCLIWorker
+
+    captured_argv: list[str] = []
+
+    class FakeProc:
+        returncode = 0
+        pid = 99999
+        stdout = None
+        stderr = None
+
+        async def wait(self):
+            return 0
+
+    async def fake_create(*args, **kwargs):
+        captured_argv.extend(args)
+        # Empty stream — parse_stream sees EOF immediately.
+        import asyncio
+        reader = asyncio.StreamReader()
+        reader.feed_eof()
+        FakeProc.stdout = reader
+        FakeProc.stderr = reader
+        return FakeProc()
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_create)
+    monkeypatch.setattr("os.getpgid", lambda pid: 1)
+
+    worker = ClaudeCLIWorker(oauth_token="t")
+    config = WorkerConfig(
+        agent_id="a", session_id="s", model="claude:sonnet",
+        worktree_path="/tmp", allowed_tools=["Read", "Grep"],
+    )
+    _ = [ev async for ev in worker.run("x", config)]
+
+    # argv should contain --allowed-tools "Read,Grep" in that order.
+    assert "--allowed-tools" in captured_argv
+    idx = captured_argv.index("--allowed-tools")
+    assert captured_argv[idx + 1] == "Read,Grep"
+
+
+@pytest.mark.asyncio
+async def test_planner_streams_events_to_event_bus() -> None:
+    """The planner mirrors text/tool events to the session bus so the
+    UI can render an activity feed instead of a frozen 'thinking' pill."""
+    from backend.api import event_bus
+    from backend.orchestrator.nodes import planner as planner_mod
+
+    sid = "s-stream"
+    event_bus.remove(sid)
+    event_bus.get_or_create(sid)
+
+    async def stub_run(self, prompt, config):
+        # Mimic a planner tool call + thinking text.
+        yield HiveEvent(
+            type=EventType.TOOL_USE, tool_name="Read",
+            tool_input={"path": "/tmp/x"},
+            agent_id=config.agent_id, session_id=sid,
+        )
+        yield HiveEvent(
+            type=EventType.TEXT_DELTA, text="checking layout",
+            agent_id=config.agent_id, session_id=sid,
+        )
+        yield HiveEvent(
+            type=EventType.TEXT_DONE,
+            text='{"response":"ok","team":[]}',
+            agent_id=config.agent_id, session_id=sid,
+        )
+        yield HiveEvent(
+            type=EventType.AGENT_END,
+            agent_id=config.agent_id, session_id=sid,
+        )
+
+    with patch.object(planner_mod.ClaudeCLIWorker, "run", stub_run):
+        await planner_mod.orchestrate(message="hi", session_id=sid)
+
+    ring = event_bus.events_since(sid, 0)
+    kinds = [e["kind"] for e in ring if e.get("type") == "planner_event"]
+    assert "tool/use" in kinds, "tool call must be mirrored"
+    assert "text/delta" in kinds, "partial text must be mirrored"
+    event_bus.remove(sid)
+
+
+@pytest.mark.asyncio
+async def test_planner_cwd_is_project_path_when_valid(tmp_path) -> None:
+    """The planner now runs at the user's project_path so Read/Glob/Grep
+    can actually inspect the files. The previous design forced cwd=/tmp
+    as a guardrail against the planner writing files, but allowed_tools
+    restricts to read-only now so this is safe and necessary."""
+    from backend.orchestrator.nodes import planner as planner_mod
+
+    captured: dict = {}
+
+    async def stub_run(self, prompt: str, config: WorkerConfig) -> AsyncIterator[HiveEvent]:
+        captured["cwd"] = config.worktree_path
+        captured["allowed_tools"] = config.allowed_tools
+        yield HiveEvent(
+            type=EventType.AGENT_END,
+            agent_id=config.agent_id, session_id=config.session_id,
+        )
+
+    with patch.object(planner_mod.ClaudeCLIWorker, "run", stub_run):
+        await planner_mod.orchestrate(
+            message="hi", session_id="s-isolated",
+            project_path=str(tmp_path),
+        )
+    assert captured["cwd"] == str(tmp_path)
+    # The cwd switch is only safe because the planner is read-only.
+    # If a future change drops the allowlist, the cwd guardrail must
+    # come back — assert both halves of the invariant here.
+    assert captured["allowed_tools"] == ["Read", "Glob", "Grep"]
+
+
+@pytest.mark.asyncio
+async def test_planner_falls_back_to_tmp_when_project_path_missing() -> None:
     from backend.orchestrator.nodes import planner as planner_mod
 
     captured: dict = {}
@@ -61,8 +203,8 @@ async def test_planner_runs_at_tmp_regardless_of_project_path(tmp_path) -> None:
 
     with patch.object(planner_mod.ClaudeCLIWorker, "run", stub_run):
         await planner_mod.orchestrate(
-            message="hi", session_id="s-isolated",
-            project_path=str(tmp_path),  # ignored on purpose
+            message="hi", session_id="s-no-path",
+            project_path="/nonexistent/path/that/should/not/exist",
         )
     assert captured["cwd"] == "/tmp"
 
@@ -122,6 +264,106 @@ def test_create_session_default_path_is_recorded(client: TestClient) -> None:
     # Whatever path the backend picked, it must be non-empty.
     assert row["path"].strip() != ""
     assert sid in row["path"]
+
+
+@pytest.mark.asyncio
+async def test_run_session_persists_workspace_path_and_approval_mode(tmp_path) -> None:
+    """graph.run_session() previously omitted path= and approval_mode=, so
+    rows it created stored '' / 'full-auto' regardless of what the caller
+    intended (incomplete fix from commit 1b058dd)."""
+    from backend.orchestrator.graph import SessionInterrupt, run_session
+    from backend.persistence.db import init_db
+
+    db = tmp_path / "test.db"
+    await init_db(db)
+
+    async def fake_orchestrator(state):  # type: ignore[no-untyped-def]
+        return {"team_composition": {"team": [], "confidence": 1.0}}
+
+    with patch("backend.orchestrator.graph.orchestrator_node", fake_orchestrator):
+        result = await run_session(
+            session_id="sess-rs",
+            agent_id="a1",
+            task="hello",
+            model="claude:sonnet",
+            worktree_path=str(tmp_path),
+            approval_mode="manual",
+            db_path=db,
+        )
+
+    # The graph parks; we only care about the persisted row.
+    assert isinstance(result, SessionInterrupt)
+
+    import sqlite3
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT path, approval_mode FROM sessions WHERE id=?",
+                       ("sess-rs",)).fetchone()
+    conn.close()
+    assert row is not None
+    assert row["path"] == str(tmp_path)
+    assert row["approval_mode"] == "manual"
+
+
+@pytest.mark.asyncio
+async def test_pipelines_run_cli_persists_workspace_path(monkeypatch, tmp_path) -> None:
+    """cli/hive.py pipelines-run direct path previously omitted path=, so
+    its sessions weren't recoverable. The fix mirrors the HTTP/scheduler
+    call sites: pass the computed workspace string explicitly."""
+    captured: dict = {}
+
+    async def fake_create_session(session_id, **kw):
+        captured.update({"session_id": session_id, **kw})
+
+    async def fake_record_run(pipeline_id, session_id, triggered_by):
+        return "run-1"
+
+    async def fake_finish_run(run_id, status):
+        return None
+
+    async def fake_run_session(**kw):
+        return {"status": "completed"}
+
+    pipeline = {
+        "id": "pl-1",
+        "task": "do thing",
+        "model": "claude:sonnet",
+        "approval_mode": "manual",
+    }
+
+    async def fake_init_db():
+        return None
+
+    async def fake_get_pipeline(_pid):
+        return pipeline
+
+    from cli import hive as cli_mod
+    monkeypatch.setattr(
+        "backend.persistence.db.init_db", fake_init_db
+    )
+    monkeypatch.setattr(
+        "backend.pipelines.store.get_pipeline", fake_get_pipeline
+    )
+    monkeypatch.setattr(
+        "backend.persistence.events.create_session", fake_create_session
+    )
+    monkeypatch.setattr(
+        "backend.pipelines.store.record_pipeline_run", fake_record_run
+    )
+    monkeypatch.setattr(
+        "backend.pipelines.store.finish_pipeline_run", fake_finish_run
+    )
+    monkeypatch.setattr(
+        "backend.orchestrator.graph.run_session", fake_run_session
+    )
+    monkeypatch.setattr(cli_mod, "_print_result", lambda *_a, **_kw: None)
+
+    await cli_mod._pipelines_run_async("pl-1")
+
+    assert "path" in captured, "create_session was called without path="
+    assert captured["path"].strip() != ""
+    assert captured["session_id"] in captured["path"]
+    assert captured["approval_mode"] == "manual"
 
 
 # ─── Bug 3: orchestrator stall watchdog ───────────────────────────────────

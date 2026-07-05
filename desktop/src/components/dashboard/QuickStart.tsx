@@ -123,6 +123,34 @@ export function QuickStart({ initialTask = '' }: QuickStartProps) {
   }
 
   async function pickWorkspace() {
+    // Native folder picker only works inside the Tauri runtime. In the
+    // browser dev preview (npm run dev), `openDialog` calls into an
+    // `invoke()` that doesn't exist — `Cannot read properties of
+    // undefined (reading 'invoke')`. Fall back to a `prompt()` so the
+    // user can paste a path manually instead of hitting a dead button.
+    // Wrapped in try/catch because `key in window` can throw SecurityError
+    // in a hardened iframe / cross-origin context — without the guard the
+    // whole pickWorkspace handler crashes and the button looks broken.
+    let inTauri = false
+    try {
+      inTauri =
+        typeof window !== 'undefined' &&
+        ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)
+    } catch {
+      inTauri = false
+    }
+    if (!inTauri) {
+      const typed = window.prompt(
+        'Native folder picker is only available in the Tauri desktop window.\n\n' +
+          'Paste a workspace path (e.g. /home/you/projects/snake or C:\\Users\\you\\projects\\snake):',
+        workspace || '',
+      )
+      if (typed && typed.trim()) {
+        setWorkspace(typed.trim())
+        rememberWorkspace(typed.trim())
+      }
+      return
+    }
     try {
       const picked = await openDialog({
         directory: true,
@@ -134,7 +162,8 @@ export function QuickStart({ initialTask = '' }: QuickStartProps) {
         rememberWorkspace(picked)
       }
     } catch (e) {
-      // Running outside Tauri (pure web preview) — surface a friendly error
+      // Even inside Tauri this can fail (denied permission, no FS plugin).
+      // Surface the real error so it's debuggable.
       setError(e instanceof Error ? e.message : 'Folder picker not available')
     }
   }

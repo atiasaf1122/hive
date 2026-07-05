@@ -30,11 +30,15 @@ durable action and surface every error to the UI.
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import os
 import re
+import socket
+import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, HTTPException
@@ -44,6 +48,16 @@ from backend.skills.registry import SKILLS_ROOT, import_skill
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/registries")
+
+# Hosts the install endpoint is allowed to fetch from. The endpoint is
+# reachable from the WebView origin (Tauri allowlist is intentionally
+# wide), so without this list any rendered skill markdown could drive
+# the backend to GET http://127.0.0.1:8765/... or any internal address.
+_ALLOWED_INSTALL_HOSTS = frozenset({
+    "github.com",
+    "raw.githubusercontent.com",
+    "clawhub.dev",
+})
 
 
 # ── Skill install ────────────────────────────────────────────────────────────
@@ -93,6 +107,9 @@ async def _fetch_skill_body(req: SkillInstallRequest) -> str:
     """Best-effort: fetch the upstream SKILL.md. Synthesise if unreachable."""
     raw_url = _to_raw_url(req.url) if req.url else None
     if raw_url:
+        # Policy check happens before any network I/O so a bad URL never
+        # reaches httpx and never produces a network-side artifact.
+        _validate_install_url(raw_url)
         try:
             async with httpx.AsyncClient(
                 timeout=8.0, headers={"User-Agent": "HIVE-installer/1.0"}
@@ -104,6 +121,8 @@ async def _fetch_skill_body(req: SkillInstallRequest) -> str:
                     "Skill body fetch returned %s for %s — synthesising",
                     resp.status_code, raw_url,
                 )
+        except HTTPException:
+            raise
         except Exception as exc:  # noqa: BLE001
             logger.info("Skill body fetch failed for %s: %s — synthesising", raw_url, exc)
 
@@ -135,6 +154,60 @@ def _to_raw_url(url: str) -> str | None:
 
 def _safe_slug(name: str) -> str:
     return re.sub(r"[^a-z0-9-]", "-", name.lower()).strip("-") or "untitled"
+
+
+def _validate_install_url(url: str) -> None:
+    """Raise HTTPException unless `url` targets an allowlisted public host.
+
+    Two layers of defence:
+      1. Hostname must be in `_ALLOWED_INSTALL_HOSTS` exactly.
+      2. Every resolved IP must be public — guards against an allowlisted
+         host pointing (via DNS rebinding or a typo'd CNAME) at a loopback
+         / private / link-local address inside the user's network.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError as exc:
+        raise HTTPException(400, f"Invalid install URL: {exc}") from exc
+
+    if parsed.scheme != "https":
+        raise HTTPException(
+            400, f"Install URL must use https (got scheme: {parsed.scheme!r})"
+        )
+
+    host = (parsed.hostname or "").lower()
+    if host not in _ALLOWED_INSTALL_HOSTS:
+        raise HTTPException(
+            400,
+            f"Install host {host!r} is not allowed. "
+            f"Permitted hosts: {sorted(_ALLOWED_INSTALL_HOSTS)}",
+        )
+
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror as exc:
+        raise HTTPException(
+            502, f"Install host {host!r} did not resolve: {exc}"
+        ) from exc
+
+    for info in infos:
+        ip_str = info[4][0]
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            continue
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            raise HTTPException(
+                400,
+                f"Install host {host!r} resolves to a non-public address ({ip}); refusing.",
+            )
 
 
 # ── MCP install ──────────────────────────────────────────────────────────────
@@ -216,16 +289,26 @@ def _claude_config_path() -> Path:
 def _read_claude_config(path: Path) -> dict:
     if not path.exists():
         return {}
+    text = path.read_text(encoding="utf-8")
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        # Don't blow up the user's config; back it up and start fresh.
-        backup = path.with_suffix(path.suffix + ".bak")
-        try:
-            backup.write_text(path.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001
-            pass
-        return {}
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        # The previous behaviour was to return {} here, which caused the
+        # next _write_claude_config() to wipe every non-MCP key the user
+        # had set (memory, tool configs, …). Save a timestamped backup
+        # of the file as it stands and refuse the install instead — the
+        # user can repair the original and retry.
+        backup = path.with_suffix(path.suffix + f".corrupted.{int(time.time())}.bak")
+        backup.write_text(text, encoding="utf-8")
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Refusing to overwrite {path}: contents are not valid JSON "
+                f"({exc.msg} at line {exc.lineno}, col {exc.colno}). "
+                f"A backup of the original has been saved to {backup}. "
+                "Fix the original file and retry the install."
+            ),
+        ) from exc
 
 
 def _write_claude_config(path: Path, config: dict) -> None:

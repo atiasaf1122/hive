@@ -144,6 +144,23 @@ CREATE TABLE IF NOT EXISTS worker_trust_scores (
     total_sessions         INTEGER NOT NULL DEFAULT 0,
     last_updated           DATETIME NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Persistent approval queue (invariant #5: correlation IDs survive restart).
+-- Without this, every team_approval / awaiting_input interrupt that the user
+-- hasn't yet answered is silently dropped on backend restart, and the
+-- orchestrator's awaiting Future never resolves.
+CREATE TABLE IF NOT EXISTS pending_approvals (
+    correlation_id   TEXT PRIMARY KEY,
+    session_id       TEXT NOT NULL REFERENCES sessions(id),
+    agent_id         TEXT NOT NULL DEFAULT '',
+    request_payload  TEXT NOT NULL DEFAULT '{}',
+    status           TEXT NOT NULL DEFAULT 'pending',  -- 'pending' | 'approved' | 'rejected' | 'expired'
+    created_at       DATETIME NOT NULL DEFAULT (datetime('now')),
+    resolved_at      DATETIME,
+    response_payload TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_pending_approvals_session ON pending_approvals(session_id);
+CREATE INDEX IF NOT EXISTS idx_pending_approvals_status  ON pending_approvals(status);
 """
 
 

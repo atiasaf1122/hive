@@ -44,12 +44,18 @@ fn backend_url() -> String {
 }
 
 #[tauri::command]
-fn backend_alive(state: tauri::State<BackendProcess>) -> bool {
-    let mut guard = state.0.lock().unwrap();
-    match guard.as_mut() {
+fn backend_alive(state: tauri::State<BackendProcess>) -> Result<bool, String> {
+    // Recover from a poisoned mutex (prior panic while holding the lock)
+    // by reading the inner state through PoisonError::into_inner — we'd
+    // rather report a stale value than panic the whole shell.
+    let mut guard = state
+        .0
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    Ok(match guard.as_mut() {
         Some(child) => matches!(child.try_wait(), Ok(None)),
         None => true, // No child means "we didn't spawn one"; an external one is running.
-    }
+    })
 }
 
 pub fn run() {
@@ -154,7 +160,12 @@ pub fn run() {
         .run(|app_handle, event| {
             if let RunEvent::ExitRequested { .. } | RunEvent::Exit = event {
                 if let Some(state) = app_handle.try_state::<BackendProcess>() {
-                    if let Some(mut child) = state.0.lock().unwrap().take() {
+                    // Even a poisoned mutex must not stop us killing the
+                    // child we spawned — recover the inner Option and
+                    // proceed. Skipping this leaks a child process on
+                    // shutdown if any earlier panic poisoned the lock.
+                    let mut guard = state.0.lock().unwrap_or_else(|p| p.into_inner());
+                    if let Some(mut child) = guard.take() {
                         let _ = child.kill();
                         let _ = child.wait();
                         eprintln!("[hive] backend stopped");
@@ -272,7 +283,8 @@ fn spawn_backend(app: &tauri::AppHandle) -> Result<(), String> {
     // that the .msi/.dmg/.AppImage installs alongside the main binary.
     if let Some(child) = spawn_sidecar_binary(app)? {
         if let Some(state) = app.try_state::<BackendProcess>() {
-            *state.0.lock().unwrap() = Some(child);
+            let mut guard = state.0.lock().unwrap_or_else(|p| p.into_inner());
+            *guard = Some(child);
         }
         return Ok(());
     }
@@ -316,7 +328,8 @@ fn spawn_backend(app: &tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| format!("spawn failed: {e}"))?;
 
     if let Some(state) = app.try_state::<BackendProcess>() {
-        *state.0.lock().unwrap() = Some(child);
+        let mut guard = state.0.lock().unwrap_or_else(|p| p.into_inner());
+        *guard = Some(child);
     }
     Ok(())
 }

@@ -39,9 +39,13 @@ class ClaudeCLIWorker:
 
     async def run(self, prompt: str, config: WorkerConfig) -> AsyncIterator[HiveEvent]:
         """Spawn claude CLI and stream events until completion."""
+        from backend.detection import resolved_claude_path
+
         full_prompt = (config.system_prompt + chr(10) + chr(10) + prompt) if config.system_prompt else prompt
         cmd = [
-            "claude",
+            # Absolute path resolved by detection so we don't depend on
+            # the launching shell's PATH including the install dir.
+            resolved_claude_path(),
             "-p", full_prompt,
             "--output-format", "stream-json",
             "--verbose",
@@ -59,6 +63,25 @@ class ClaudeCLIWorker:
             # Map shorthand to full model ID
             model_name = _resolve_model(model_name)
             cmd += ["--model", model_name]
+
+        # Allowed-tools whitelist — used by the planner to enforce
+        # read-only access (it kept silently writing files in /tmp
+        # instead of just deciding the team composition). When set
+        # explicitly to a non-empty list, only those tools are permitted.
+        #
+        # We explicitly REFUSE an empty list rather than passing
+        # `--allowed-tools ""` to the claude CLI. The CLI's behaviour on
+        # an empty CSV is undocumented (could be "block all" or "ignore
+        # the flag") — both modes would be silent footguns for callers
+        # that meant one but got the other. An empty list almost always
+        # means a caller bug, so raise.
+        if config.allowed_tools is not None:
+            if not config.allowed_tools:
+                raise ValueError(
+                    "WorkerConfig.allowed_tools=[] is rejected — pass None "
+                    "to disable the flag, or pass at least one tool name."
+                )
+            cmd += ["--allowed-tools", ",".join(config.allowed_tools)]
 
         logger.info(
             "Spawning claude CLI | agent=%s session=%s cwd=%s",

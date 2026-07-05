@@ -161,3 +161,98 @@ async def get_session(session_id: str, db_path: Path = DB_PATH) -> dict | None:
         )
         row = await cursor.fetchone()
     return dict(row) if row else None
+
+
+# ── pending_approvals (invariant #5: correlation IDs survive restart) ──────
+
+
+async def create_pending_approval(
+    correlation_id: str,
+    session_id: str,
+    agent_id: str,
+    request_payload: dict,
+    db_path: Path = DB_PATH,
+) -> None:
+    """Persist an approval request before the runner awaits it. Read back on
+    restart so re-opened sessions can re-emit the interrupt to the client."""
+    async with get_conn(db_path) as conn:
+        await conn.execute(
+            "INSERT INTO pending_approvals "
+            "(correlation_id, session_id, agent_id, request_payload, status) "
+            "VALUES (?, ?, ?, ?, 'pending')",
+            (correlation_id, session_id, agent_id, json.dumps(request_payload)),
+        )
+        await conn.commit()
+
+
+async def resolve_pending_approval(
+    correlation_id: str,
+    status: str,
+    response_payload: dict | None = None,
+    db_path: Path = DB_PATH,
+) -> bool:
+    """Mark a pending_approvals row as resolved. Returns True iff the row was
+    still pending (so callers can avoid double-firing waiters)."""
+    if status not in {"approved", "rejected", "expired"}:
+        raise ValueError(f"invalid resolution status: {status!r}")
+    payload_json = json.dumps(response_payload) if response_payload is not None else None
+    async with get_conn(db_path) as conn:
+        cursor = await conn.execute(
+            "UPDATE pending_approvals "
+            "SET status=?, resolved_at=datetime('now'), response_payload=? "
+            "WHERE correlation_id=? AND status='pending'",
+            (status, payload_json, correlation_id),
+        )
+        await conn.commit()
+        return cursor.rowcount > 0
+
+
+async def get_pending_approval(
+    correlation_id: str, db_path: Path = DB_PATH
+) -> dict | None:
+    async with get_conn(db_path) as conn:
+        cursor = await conn.execute(
+            "SELECT * FROM pending_approvals WHERE correlation_id=?",
+            (correlation_id,),
+        )
+        row = await cursor.fetchone()
+    if row is None:
+        return None
+    out = dict(row)
+    if out.get("request_payload"):
+        out["request_payload"] = json.loads(out["request_payload"])
+    if out.get("response_payload"):
+        out["response_payload"] = json.loads(out["response_payload"])
+    return out
+
+
+async def list_pending_approvals(
+    session_id: str | None = None, db_path: Path = DB_PATH
+) -> list[dict]:
+    """List approval requests that are still awaiting a response.
+
+    If `session_id` is given, restricts to that session; otherwise returns
+    every pending row across the DB (used by restart recovery).
+    """
+    async with get_conn(db_path) as conn:
+        if session_id is None:
+            cursor = await conn.execute(
+                "SELECT * FROM pending_approvals WHERE status='pending' "
+                "ORDER BY created_at"
+            )
+        else:
+            cursor = await conn.execute(
+                "SELECT * FROM pending_approvals "
+                "WHERE status='pending' AND session_id=? ORDER BY created_at",
+                (session_id,),
+            )
+        rows = await cursor.fetchall()
+    out = []
+    for row in rows:
+        d = dict(row)
+        if d.get("request_payload"):
+            d["request_payload"] = json.loads(d["request_payload"])
+        if d.get("response_payload"):
+            d["response_payload"] = json.loads(d["response_payload"])
+        out.append(d)
+    return out

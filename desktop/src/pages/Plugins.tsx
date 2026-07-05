@@ -8,7 +8,7 @@
  */
 import { IconPlug, IconRefresh, IconSearch } from '@tabler/icons-react'
 import clsx from 'clsx'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { PermissionDialog } from '../components/plugins/PermissionDialog'
 import { PluginCard, type MCPItem } from '../components/plugins/PluginCard'
 import { FlowStrip, HeroHeader } from '../components/ui/HeroHeader'
@@ -35,8 +35,10 @@ export function Plugins() {
   const [installedIds, setInstalledIds] = useState<Set<string>>(new Set())
   const [pendingInstall, setPendingInstall] = useState<MCPItem | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const requestIdRef = useRef(0)
 
-  async function load(force = false) {
+  const load = useCallback(async (force = false) => {
+    const myId = ++requestIdRef.current
     if (force) setRefreshing(true)
     try {
       const url = new URL('/api/registries/mcp/list', 'http://x')
@@ -44,18 +46,21 @@ export function Plugins() {
       if (category !== 'all') url.searchParams.set('category', category)
       if (force) url.searchParams.set('force_refresh', 'true')
       const res = await api.get<MCPResponse>(url.pathname + url.search)
+      if (myId !== requestIdRef.current) return
       setData(res)
       setError(null)
     } catch (e) {
+      if (myId !== requestIdRef.current) return
       setError(e instanceof Error ? e.message : 'Could not load plugins')
     } finally {
-      setRefreshing(false)
+      if (myId === requestIdRef.current) setRefreshing(false)
     }
-  }
-  useEffect(() => {
-    void load()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, category])
+
+  useEffect(() => {
+    const handle = window.setTimeout(() => { void load() }, 250)
+    return () => window.clearTimeout(handle)
+  }, [load])
 
   const visibleItems = useMemo(() => {
     if (!data) return []

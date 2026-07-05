@@ -34,9 +34,15 @@ export function CloseConfirmation() {
   const [pending, setPending] = useState<ActiveCounts | null>(null)
 
   useEffect(() => {
-    let unlisten: UnlistenFn | null = null
+    // `unlisten()` is assigned asynchronously inside listen().then(...).
+    // If this effect re-runs (backgroundAutomations toggle) before the
+    // promise resolves, the cleanup below would read a stale null and
+    // the previous listener would leak — `cancelled` plus assigning
+    // through the closure lets us tear down both halves correctly.
+    let cancelled = false
+    let unlistenFn: UnlistenFn | null = null
 
-    listen('hive://close-requested', async () => {
+    const handler = async () => {
       let counts: ActiveCounts
       try {
         counts = await api.get<ActiveCounts>('/api/lifecycle/active-counts')
@@ -46,30 +52,30 @@ export function CloseConfirmation() {
         return
       }
 
-      // 1. Interactive agents busy → ask the user.
       if (counts.has_interactive_work) {
         setPending(counts)
         return
       }
-
-      // 2. Background work + user opted-in → silently close to tray (9D-B
-      //    paints the tray icon; until then this is effectively the same
-      //    as closing — backend keeps polling for cron triggers).
       if (counts.should_keep_background && backgroundAutomations) {
         await invoke('confirm_close', { confirm: true })
         return
       }
-
-      // 3. Nothing active → just close.
       await invoke('confirm_close', { confirm: true })
-    })
-      .then((fn) => {
-        unlisten = fn
-      })
-      .catch(() => {})
+    }
+
+    listen('hive://close-requested', handler).then((fn) => {
+      if (cancelled) {
+        // Effect cleanup already ran while we were waiting for listen()
+        // to resolve — detach immediately so the listener doesn't leak.
+        fn()
+        return
+      }
+      unlistenFn = fn
+    }).catch(() => {})
 
     return () => {
-      if (unlisten) unlisten()
+      cancelled = true
+      if (unlistenFn) unlistenFn()
     }
   }, [backgroundAutomations])
 

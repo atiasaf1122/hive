@@ -220,3 +220,80 @@ async def test_resume_after_simulated_restart(tmp_path: Path) -> None:
     # The checkpoint surfaces the same interrupt — session lives across restart.
     assert isinstance(resumed, SessionInterrupt)
     assert resumed.payload["type"] == "awaiting_input"
+
+
+# ── pending_approvals persistence (invariant #5) ──────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_pending_approval_round_trip(db: Path) -> None:
+    """Approval rows must survive across a backend restart so a re-opened
+    session can replay the interrupt to its reconnecting clients."""
+    from backend.persistence.events import (
+        create_pending_approval,
+        get_pending_approval,
+        list_pending_approvals,
+        resolve_pending_approval,
+    )
+
+    await create_session("sess-pa", path="/tmp/x", db_path=db)
+    await create_pending_approval(
+        correlation_id="cid-1",
+        session_id="sess-pa",
+        agent_id="orchestrator",
+        request_payload={"type": "team_approval", "confidence": 0.42},
+        db_path=db,
+    )
+
+    # Survives "restart": close + reopen the DB and read back.
+    row = await get_pending_approval("cid-1", db_path=db)
+    assert row is not None
+    assert row["status"] == "pending"
+    assert row["request_payload"]["confidence"] == 0.42
+
+    pending = await list_pending_approvals(session_id="sess-pa", db_path=db)
+    assert len(pending) == 1
+    assert pending[0]["correlation_id"] == "cid-1"
+
+
+@pytest.mark.asyncio
+async def test_resolve_pending_approval_is_idempotent(db: Path) -> None:
+    """Second resolve on the same row must return False (already settled)
+    so racing callers can't both fire a waiter."""
+    from backend.persistence.events import (
+        create_pending_approval,
+        resolve_pending_approval,
+    )
+
+    await create_session("sess-id", path="/tmp/y", db_path=db)
+    await create_pending_approval(
+        correlation_id="cid-id",
+        session_id="sess-id",
+        agent_id="orchestrator",
+        request_payload={},
+        db_path=db,
+    )
+    first = await resolve_pending_approval(
+        "cid-id", status="approved", response_payload={"approved": True}, db_path=db
+    )
+    second = await resolve_pending_approval(
+        "cid-id", status="rejected", response_payload={"approved": False}, db_path=db
+    )
+    assert first is True
+    assert second is False
+
+
+@pytest.mark.asyncio
+async def test_parallel_pending_approvals_for_one_session(db: Path) -> None:
+    """Two approval rows for one session, both pending, distinct ids."""
+    from backend.persistence.events import (
+        create_pending_approval,
+        list_pending_approvals,
+    )
+
+    await create_session("sess-multi", path="/tmp/z", db_path=db)
+    await create_pending_approval("a", "sess-multi", "agent-1", {}, db_path=db)
+    await create_pending_approval("b", "sess-multi", "agent-2", {}, db_path=db)
+
+    rows = await list_pending_approvals(session_id="sess-multi", db_path=db)
+    assert {r["correlation_id"] for r in rows} == {"a", "b"}

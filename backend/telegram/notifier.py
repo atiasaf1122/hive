@@ -18,10 +18,18 @@ from backend.telegram.session_router import get_subscribers
 logger = logging.getLogger(__name__)
 
 
-async def notify_approval(session_id: str, payload: dict) -> int:
+async def notify_approval(
+    session_id: str, payload: dict, *, correlation_id: str | None = None
+) -> int:
     """Push an approval-request card to every chat attached to this session.
 
     Returns the number of chats successfully notified.
+
+    `correlation_id` is required for Telegram callback resolution — it must
+    be the same id persisted in `pending_approvals` and surfaced on the WS
+    interrupt event so the user can answer from either surface. Falling
+    back to `payload['correlation_id']` keeps a no-op default for legacy
+    callers (none ship today).
     """
     bot = get_bot()
     if bot is None:
@@ -35,8 +43,17 @@ async def notify_approval(session_id: str, payload: dict) -> int:
     if not chats:
         return 0
 
+    corr_id = correlation_id or payload.get("correlation_id")
+    if not corr_id:
+        logger.warning(
+            "notify_approval called without correlation_id for session %s — "
+            "Telegram approve/reject would have no valid target; dropping.",
+            session_id,
+        )
+        return 0
+
     text = _format_approval(session_id, payload)
-    keyboard = build_approval_keyboard(session_id)
+    keyboard = build_approval_keyboard(corr_id)
 
     delivered = 0
     for chat_id in chats:

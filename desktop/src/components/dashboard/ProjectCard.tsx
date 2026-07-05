@@ -21,6 +21,7 @@ import clsx from 'clsx'
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../../lib/api'
+import { toast } from '../../lib/toast'
 import { useProjectTabs } from '../../stores/projectTabs'
 import { useSessions, type ProjectState } from '../../stores/sessions'
 import { useTemplates } from '../../stores/templates'
@@ -113,6 +114,9 @@ export function ProjectCard({ project }: Props) {
       URL.revokeObjectURL(url)
     } catch (e) {
       console.error('export failed', e)
+      toast.error(
+        `Couldn't export this session. ${e instanceof Error ? e.message : ''}`.trim(),
+      )
     }
   }
 
