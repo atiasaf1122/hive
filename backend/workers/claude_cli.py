@@ -63,6 +63,12 @@ class ClaudeCLIWorker:
             # never pins dated IDs. See backend/models.py.
             cmd += ["--model", resolve_cli_model(model_name)]
 
+        # C2: per-agent MCP servers. --strict-mcp-config is the important
+        # half — without it the CLI merges the user's global ~/.claude.json
+        # servers into every worker (verified against `claude --help`).
+        if config.mcp_config_path:
+            cmd += ["--mcp-config", config.mcp_config_path, "--strict-mcp-config"]
+
         # B2: conversation continuity. First spawn names the conversation
         # (--session-id); re-spawns of the same logical agent resume it
         # (--resume) so context carries across turns / capability re-spawns.

@@ -13,6 +13,7 @@ class EventType(StrEnum):
     AGENT_START = "agent/start"
     AGENT_END = "agent/end"
     AGENT_ERROR = "agent/error"
+    MCP_ATTACHED = "mcp/attached"  # orchestrator-emitted: servers equipped at spawn
 
     # Content
     TEXT_DELTA = "text/delta"
@@ -96,6 +97,11 @@ class WorkerConfig(BaseModel):
     # turns instead of re-exploring the project. Ignored by OllamaWorker.
     claude_session_id: str | None = None
     resume_claude_session: bool = False
+    # C2: path to a per-agent MCP config JSON ({"mcpServers": {...}}). When
+    # set, ClaudeCLIWorker passes --mcp-config <path> --strict-mcp-config so
+    # the agent sees EXACTLY these servers — the user's global ~/.claude.json
+    # servers never leak into workers. Ignored by OllamaWorker.
+    mcp_config_path: str | None = None
 
 
 @runtime_checkable

@@ -32,6 +32,8 @@ class SpawnedAgent:
     subtask: str = ""
     files_hint: list[str] | None = None
     max_turns: int | None = None  # None → inherit the session default
+    # C2/C3: MCP servers assigned by the planner (catalog ids).
+    mcp_servers: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -99,6 +101,7 @@ async def spawn_agents(
             subtask=getattr(member, "subtask", ""),
             files_hint=getattr(member, "files_hint", None),
             max_turns=getattr(member, "max_turns", None),
+            mcp_servers=list(getattr(member, "mcp_servers", []) or []),
         )
 
     results = await asyncio.gather(*[_create_one(m, i) for m, i in all_members])

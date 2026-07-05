@@ -93,6 +93,7 @@ class TeamMember:
         subtask: str = "",
         files_hint: list[str] | None = None,
         max_turns: int | None = None,
+        mcp_servers: list[str] | None = None,
     ) -> None:
         self.role = role
         self.model = model
@@ -101,6 +102,7 @@ class TeamMember:
         self.subtask = subtask
         self.files_hint = files_hint
         self.max_turns = max_turns
+        self.mcp_servers = mcp_servers or []
 
     def __repr__(self) -> str:
         return (

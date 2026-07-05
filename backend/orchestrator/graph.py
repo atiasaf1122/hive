@@ -52,7 +52,7 @@ from backend.persistence.events import (
 )
 from backend.skills.injector import build_skill_context
 from backend.skills.registry import hybrid_search
-from backend.workers.base import EventType, WorkerConfig
+from backend.workers.base import EventType, HiveEvent, WorkerConfig
 from backend.workers.claude_cli import ClaudeCLIWorker
 from backend.workers.ollama import OllamaWorker
 
@@ -114,6 +114,7 @@ async def orchestrator_node(state: GraphState) -> dict:
                 "role": m.role, "model": m.model, "count": m.count,
                 "passive": m.passive, "subtask": m.subtask,
                 "files_hint": m.files_hint, "max_turns": m.max_turns,
+                "mcp_servers": getattr(m, "mcp_servers", []),
             }
             for m in decision.composition.team
         ],
@@ -838,6 +839,72 @@ async def _execute_worker(
     except Exception as exc:
         logger.debug("Skill search skipped: %s", exc)
 
+    # C2: per-agent MCP servers — preflight, render, write the config file.
+    # Preflight failures fail the spawn FAST with a named requirement instead
+    # of letting the claude CLI die cryptically mid-run.
+    mcp_config_path: str | None = None
+    if agent.mcp_servers and agent.model.startswith("claude:"):
+        from backend.mcp.catalog import get_spec, preflight, render_mcp_config
+        from backend.persistence.db import HIVE_DIR
+
+        missing: list[str] = []
+        for sid in agent.mcp_servers:
+            spec = get_spec(sid)
+            if spec is None:
+                missing.append(f"unknown MCP server {sid!r}")
+            else:
+                missing.extend(f"{sid}: {m}" for m in preflight(spec))
+        if missing:
+            msg = "MCP preflight failed — " + "; ".join(missing)
+            logger.error("%s (agent=%s)", msg, agent.agent_id)
+            error_event = HiveEvent(
+                type=EventType.AGENT_ERROR, agent_id=agent.agent_id,
+                session_id=session_id, error=msg,
+            )
+            try:
+                await write_event(error_event)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Event write failed: %s", exc)
+            await _emit_to_ws(session_id, {
+                "type": "mcp_preflight_failed",
+                "session_id": session_id,
+                "agent_id": agent.agent_id,
+                "missing": missing,
+            })
+            await update_agent_status(agent.agent_id, "failed")
+            breaker.record_failure()
+            return AgentResult(
+                agent_id=agent.agent_id, status="failed", text_output="",
+                input_tokens=0, output_tokens=0, cost_usd=0.0, error=msg,
+            )
+
+        cfg = render_mcp_config(agent.mcp_servers, agent.agent_id, agent.worktree_path)
+        cfg_dir = HIVE_DIR / "mcp-configs"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        cfg_file = cfg_dir / f"{session_id}-{agent.agent_id}.json"
+        # Outside the worktree on purpose: auto-commit would otherwise sweep
+        # the config (and any expanded tokens) into the merge history.
+        import json as _json
+        cfg_file.write_text(_json.dumps(cfg, indent=2))
+        mcp_config_path = str(cfg_file)
+
+        # C4: visibility — the event stream shows what each agent carried.
+        attach_event = HiveEvent(
+            type=EventType.MCP_ATTACHED, agent_id=agent.agent_id,
+            session_id=session_id,
+            raw_payload={"servers": list(agent.mcp_servers)},
+        )
+        try:
+            await write_event(attach_event)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Event write failed: %s", exc)
+        await _emit_to_ws(session_id, {
+            "type": "mcp_servers_attached",
+            "session_id": session_id,
+            "agent_id": agent.agent_id,
+            "servers": list(agent.mcp_servers),
+        })
+
     # B2: mint or reuse this logical agent's claude conversation uuid so a
     # re-spawned agent resumes with its context instead of starting amnesiac.
     claude_session_id: str | None = None
@@ -859,6 +926,7 @@ async def _execute_worker(
         system_prompt=skill_context,
         claude_session_id=claude_session_id,
         resume_claude_session=resume_claude,
+        mcp_config_path=mcp_config_path,
     )
 
     text_parts: list[str] = []
@@ -1025,6 +1093,7 @@ def _agent_to_dict(a: SpawnedAgent) -> dict:
         "agent_id": a.agent_id, "role": a.role, "model": a.model,
         "worktree_path": a.worktree_path, "passive": a.passive, "branch": a.branch,
         "subtask": a.subtask, "files_hint": a.files_hint, "max_turns": a.max_turns,
+        "mcp_servers": a.mcp_servers,
     }
 
 
@@ -1035,4 +1104,5 @@ def _dict_to_agent(d: dict) -> SpawnedAgent:
         branch=d.get("branch", ""),
         subtask=d.get("subtask", ""), files_hint=d.get("files_hint"),
         max_turns=d.get("max_turns"),
+        mcp_servers=d.get("mcp_servers") or [],
     )

@@ -216,3 +216,44 @@ async def test_respawn_passes_resume_with_same_uuid():
     assert "--resume" in cmd
     assert cmd[cmd.index("--resume") + 1] == cfg.claude_session_id
     assert "--session-id" not in cmd
+
+
+@pytest.mark.asyncio
+async def test_mcp_config_flags_present_when_set():
+    """C2: --mcp-config + --strict-mcp-config (no global-server leakage)."""
+    proc = _build_mock_process({"type": "system", "subtype": "init"})
+    captured: dict = {}
+
+    async def fake_exec(*cmd, **kw):
+        captured["cmd"] = list(cmd)
+        return proc
+
+    cfg = _make_config()
+    cfg.mcp_config_path = "/x/mcp-configs/sess-agent.json"
+    with patch("asyncio.create_subprocess_exec", side_effect=fake_exec), \
+         patch("os.getpgid", return_value=1):
+        worker = ClaudeCLIWorker(oauth_token="test-token")
+        [e async for e in worker.run("hello", cfg)]
+
+    cmd = captured["cmd"]
+    assert "--mcp-config" in cmd
+    assert cmd[cmd.index("--mcp-config") + 1] == cfg.mcp_config_path
+    assert "--strict-mcp-config" in cmd
+
+
+@pytest.mark.asyncio
+async def test_no_mcp_flags_without_config():
+    proc = _build_mock_process({"type": "system", "subtype": "init"})
+    captured: dict = {}
+
+    async def fake_exec(*cmd, **kw):
+        captured["cmd"] = list(cmd)
+        return proc
+
+    with patch("asyncio.create_subprocess_exec", side_effect=fake_exec), \
+         patch("os.getpgid", return_value=1):
+        worker = ClaudeCLIWorker(oauth_token="test-token")
+        [e async for e in worker.run("hello", _make_config())]
+
+    assert "--mcp-config" not in captured["cmd"]
+    assert "--strict-mcp-config" not in captured["cmd"]
