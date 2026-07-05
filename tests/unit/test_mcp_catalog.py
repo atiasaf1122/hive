@@ -35,6 +35,12 @@ def test_render_expands_placeholders() -> None:
     # instance); --user-data-dir is rejected in isolated mode.
     assert "--isolated" in args and "--headless" in args
     assert "--user-data-dir" not in args
+    # file:// navigation is blocked by default and would break the
+    # open-the-built-page flow (C5 e2e finding).
+    assert "--allow-unrestricted-file-access" in args
+    # Default channel is system Chrome, absent on WSL (C5 finding).
+    joined2 = " ".join(args)
+    assert "--browser chromium" in joined2
 
 
 def test_filesystem_scoped_to_worktree_only() -> None:

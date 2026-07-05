@@ -60,7 +60,16 @@ CATALOG: dict[str, MCPServerSpec] = {
             # userDataDir is not supported in isolated mode", verified by
             # running the server) — do not add it back. --headless: never
             # pop windows on the host.
-            args=["-y", "@playwright/mcp@latest", "--headless", "--isolated"],
+            # --allow-unrestricted-file-access: the MCP blocks file:// URLs
+            # by default, which kills the primary local-testing flow (open
+            # the page the Builder just wrote). Its own --help notes the
+            # restriction "does not serve as a security boundary" — fine to
+            # lift for a single-user local tool. (C5 e2e finding #3.)
+            # --browser chromium: the default is the system Chrome channel
+            # (/opt/google/chrome), absent on WSL — C5 finding #4. Bundled
+            # chromium comes from the MCP's OWN installer (see notes).
+            args=["-y", "@playwright/mcp@latest", "--headless", "--isolated",
+                  "--browser", "chromium", "--allow-unrestricted-file-access"],
             per_agent_isolation=True,
             isolation_args=[
                 "--output-dir", "{worktree}/.playwright",
@@ -68,8 +77,10 @@ CATALOG: dict[str, MCPServerSpec] = {
             tags=["browser", "vision", "screenshots", "e2e-testing", "scraping"],
             requires=["node>=20"],
             notes=(
-                "Real browser control + screenshots. First use downloads "
-                "browsers (~700MB) — expect a slow first run."
+                "Real browser control + screenshots. One-time setup (~180MB): "
+                "`npx -y @playwright/mcp@latest install-browser "
+                "chrome-for-testing` — the MCP's OWN installer; a standalone "
+                "`npx playwright install` fetches a mismatched build."
             ),
             when_to_use=(
                 "ONLY for subtasks that verify UI in a real browser, e2e-test "
