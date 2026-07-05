@@ -154,3 +154,90 @@ async def test_user_can_approve_flagged_plan() -> None:
             "approval_mode": "full-auto", "team_composition": comp,
         })
     assert out == {}                                   # approved → proceed
+
+
+# ── D6: pre-flight estimate ─────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_estimate_from_seeded_history(tmp_path) -> None:
+    from backend.orchestrator.estimator import estimate_plan
+    from backend.persistence.db import init_db
+    from backend.persistence.events import (
+        create_agent, create_session, write_cost, write_event)
+    from backend.workers.base import EventType, HiveEvent
+
+    db = tmp_path / "t.db"
+    await init_db(db)
+    # Seed 3 similar past sessions: 2 agents each, known cost + duration.
+    for i, cost in enumerate([0.40, 0.60, 1.00]):
+        sid = f"h{i}"
+        await create_session(sid, db_path=db)
+        for j in range(2):
+            await create_agent(f"a{i}{j}", sid, role="Builder",
+                               model="claude:sonnet", worktree_path="/w", db_path=db)
+        await write_cost(sid, f"a{i}0", 100, 200, cost, db_path=db)
+        await write_event(HiveEvent(type=EventType.AGENT_START, agent_id=f"a{i}0",
+                                    session_id=sid, ts=1000.0), path=db)
+        await write_event(HiveEvent(type=EventType.AGENT_END, agent_id=f"a{i}0",
+                                    session_id=sid, ts=1000.0 + 300), path=db)
+
+    plan = {"team": [{"role": "Builder", "model": "claude:sonnet"},
+                     {"role": "Tester", "model": "claude:sonnet"}]}
+    est = await estimate_plan(plan, db_path=db)
+    assert est is not None
+    assert est["based_on_sessions"] == 3
+    assert est["cost_median_usd"] == 0.60
+    assert est["cost_p90_usd"] >= 0.60
+    assert est["duration_median_s"] == 300
+
+
+@pytest.mark.asyncio
+async def test_estimate_cold_start_returns_none(tmp_path) -> None:
+    from backend.orchestrator.estimator import estimate_plan
+    from backend.persistence.db import init_db
+
+    db = tmp_path / "t.db"
+    await init_db(db)
+    plan = {"team": [{"role": "Builder", "model": "claude:sonnet"}]}
+    assert await estimate_plan(plan, db_path=db) is None
+
+
+@pytest.mark.asyncio
+async def test_estimate_vs_actual_event_recorded() -> None:
+    from backend.orchestrator.graph import review_node
+    from backend.workers.base import EventType
+
+    written = []
+
+    async def fake_write(event, path=None):
+        written.append(event)
+
+    state = {
+        "session_id": "s-e",
+        "team_composition": {"team": [], "estimate": {
+            "cost_median_usd": 0.5, "cost_p90_usd": 1.0,
+            "duration_median_s": 300, "duration_p90_s": 500,
+            "based_on_sessions": 3}},
+        "spawn_plan": {"session_id": "s-e", "project_path": "/p",
+                       "active_agents": [], "passive_agents": []},
+        "worker_results": {"a": {"agent_id": "a", "status": "completed",
+                                 "text_output": "t", "summary": "s",
+                                 "input_tokens": 10, "output_tokens": 20,
+                                 "cost_usd": 0.75, "error": None}},
+        "conversation_history": [], "last_response": "",
+    }
+    fake_report = type("R", (), {"notes": [], "success": True,
+                                 "total_commits_merged": 0,
+                                 "failed_agents": [], "merged": [],
+                                 "conflicts": []})()
+    with patch("backend.orchestrator.graph.review_and_merge",
+               new_callable=AsyncMock, return_value=fake_report), \
+         patch("backend.orchestrator.graph.write_event", side_effect=fake_write), \
+         patch("backend.orchestrator.graph._emit_to_ws", new_callable=AsyncMock):
+        await review_node(state)  # type: ignore[arg-type]
+
+    est_events = [e for e in written if str(e.type) == str(EventType.ESTIMATE_ACTUAL)]
+    assert len(est_events) == 1
+    assert est_events[0].raw_payload["actual_cost_usd"] == 0.75
+    assert est_events[0].raw_payload["estimate"]["based_on_sessions"] == 3

@@ -234,6 +234,11 @@ function ApprovalCard({ sessionId, payload }: { sessionId: string; payload: Inte
             confidence {(confidence * 100).toFixed(0)}%
           </div>
         </div>
+        <div className="text-xs text-ink-muted mb-2">
+          {payload.estimate
+            ? `Est. $${payload.estimate.cost_median_usd.toFixed(2)}–$${payload.estimate.cost_p90_usd.toFixed(2)} · ~${Math.round(payload.estimate.duration_median_s / 60)}–${Math.max(1, Math.round(payload.estimate.duration_p90_s / 60))} min · based on ${payload.estimate.based_on_sessions} similar sessions`
+            : 'No cost estimate yet — not enough similar sessions.'}
+        </div>
         {comp && (
           <>
             <ul className="space-y-1 mb-3">

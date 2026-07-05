@@ -20,6 +20,7 @@ class EventType(StrEnum):
     REVIEW_LLM = "review/llm"
     LESSON_DISCARDED = "lesson/discarded"
     COMPACTION = "compaction/state"
+    ESTIMATE_ACTUAL = "estimate/actual"
 
     # Content
     TEXT_DELTA = "text/delta"

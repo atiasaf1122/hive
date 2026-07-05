@@ -177,6 +177,16 @@ async def orchestrator_node(state: GraphState) -> dict:
             **check.to_dict(),
         })
 
+        # D6: pre-flight estimate from similar past sessions — None on cold
+        # start (the modal then shows "no estimate yet", never invented
+        # numbers).
+        from backend.orchestrator.estimator import estimate_plan
+        try:
+            composition_dict["estimate"] = await estimate_plan(composition_dict)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Estimator failed: %s", exc)
+            composition_dict["estimate"] = None
+
     await _emit_to_ws(state["session_id"], {
         "type": "orchestrator_decision",
         "session_id": state["session_id"],
@@ -267,6 +277,7 @@ async def approval_node(state: GraphState) -> dict:
         "team_composition": comp,
         "confidence": confidence,
         "plan_check": plan_check or None,
+        "estimate": comp.get("estimate"),
         "reason": (
             "plan_check" if plan_flagged
             else ("low_confidence" if low_confidence else "approval_mode")
@@ -574,6 +585,21 @@ async def review_node(state: GraphState) -> dict:
         "session_id": state["session_id"],
         "text": final_message,
     })
+
+    # D6: record estimate vs actual so the estimator's quality is itself
+    # measurable from the event log.
+    estimate = (state.get("team_composition") or {}).get("estimate")
+    if estimate:
+        try:
+            await write_event(HiveEvent(
+                type=EventType.ESTIMATE_ACTUAL,
+                agent_id="orchestrator", session_id=state["session_id"],
+                raw_payload={"estimate": estimate,
+                             "actual_cost_usd": round(total_cost, 4),
+                             "actual_tokens": total_in + total_out},
+            ))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Event write failed: %s", exc)
 
     combined_result = AgentResult(
         agent_id="orchestrator",

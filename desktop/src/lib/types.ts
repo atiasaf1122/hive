@@ -73,6 +73,14 @@ export interface InterruptPayload {
   last_response?: string
   /** D2: plan-quality gate result — issues shown before the user approves. */
   plan_check?: { score: number; issues: string[]; passed: boolean } | null
+  /** D6: cost/duration estimate from similar past sessions (null = cold start). */
+  estimate?: {
+    cost_median_usd: number
+    cost_p90_usd: number
+    duration_median_s: number
+    duration_p90_s: number
+    based_on_sessions: number
+  } | null
 }
 
 /* ── Live WS events (loose — only the fields we read are typed) ───────── */
