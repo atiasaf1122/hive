@@ -118,6 +118,23 @@ def golden_run(
 
 
 @app.command()
+def meta(
+    project: str = typer.Option(None, "--project", help="Project path (default: global)"),
+) -> None:
+    """Run the META analysis — one Opus call over HIVE's own stats (D8).
+
+    Cost note: one Opus analysis, roughly $0.10-0.50 depending on history size.
+    """
+    async def _run() -> None:
+        from backend.meta.analyzer import run_meta
+        report, path = await run_meta(project)
+        typer.echo(report)
+        typer.echo(f"\nSaved to {path}")
+
+    asyncio.run(_run())
+
+
+@app.command()
 def doctor() -> None:
     """Live-check every MCP catalog server: spawn + initialize handshake (D0.3)."""
 

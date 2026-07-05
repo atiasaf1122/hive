@@ -28,6 +28,21 @@ interface LessonRow {
 export function LessonsPanel() {
   const [lessons, setLessons] = useState<LessonRow[]>([])
   const [distillSession, setDistillSession] = useState('')
+  const [metaRunning, setMetaRunning] = useState(false)
+  const [metaReport, setMetaReport] = useState<string | null>(null)
+
+  async function runMeta() {
+    setMetaRunning(true)
+    try {
+      const res = await api.post<{ report: string; report_path: string }>('/api/meta/run', {})
+      setMetaReport(res.report)
+      toast.success(`META report saved to ${res.report_path}`)
+    } catch (e) {
+      toast.error(`META failed: ${e instanceof Error ? e.message : e}`)
+    } finally {
+      setMetaRunning(false)
+    }
+  }
 
   const reload = useCallback(async () => {
     try {
@@ -135,6 +150,25 @@ export function LessonsPanel() {
             Distill
           </button>
         </div>
+      </SettingCard>
+
+      <SettingCard
+        title="META analysis"
+        description="One Opus pass over HIVE's own stats (lessons, trust, failure clusters, costs, estimates). Advises only — nothing auto-executes. Cost: ~$0.10–0.50 depending on history size."
+      >
+        <button
+          type="button"
+          className="btn-ghost text-xs"
+          disabled={metaRunning}
+          onClick={() => void runMeta()}
+        >
+          {metaRunning ? 'Analyzing…' : 'Analyze & Advise (global)'}
+        </button>
+        {metaReport && (
+          <pre className="mt-3 text-[11px] text-ink-muted bg-surface-2 rounded-soft p-3 overflow-x-auto max-h-96 whitespace-pre-wrap">
+            {metaReport}
+          </pre>
+        )}
       </SettingCard>
     </>
   )
