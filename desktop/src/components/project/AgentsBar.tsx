@@ -90,6 +90,11 @@ function AgentPill({
         <div className="flex items-center gap-1.5">
           <span className={clsx('w-1.5 h-1.5 rounded-full shrink-0', running ? 'bg-emerald-400 animate-pulse' : 'bg-ink-faint/60')} />
           <span className="text-sm text-ink truncate">{agent.role}</span>
+          {(agent.mcp_servers ?? []).map((s) => (
+            <span key={s} className="text-[9px] px-1 py-0.5 rounded-full bg-sky-500/15 text-sky-500 shrink-0" title={`MCP: ${s}`}>
+              🔌 {s}
+            </span>
+          ))}
         </div>
         <div className="text-[11px] text-ink-muted truncate">
           {activity || (passive ? 'passive' : '—')}

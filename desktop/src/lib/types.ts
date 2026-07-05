@@ -22,6 +22,8 @@ export interface AgentInfo {
   role: string
   model: string
   status: 'idle' | 'running' | 'completed' | 'failed' | string
+  /** C3/C4: MCP servers this agent is equipped with (catalog ids). */
+  mcp_servers?: string[]
 }
 
 export interface SessionInfo {
@@ -49,6 +51,8 @@ export interface TeamMember {
   subtask?: string
   files_hint?: string[] | null
   max_turns?: number | null
+  /** C3: MCP servers assigned to this agent — part of what's approved. */
+  mcp_servers?: string[]
 }
 
 export interface TeamComposition {
@@ -89,6 +93,8 @@ export interface WSEvent {
   correlation_id?: string
   team_composition?: TeamComposition
   agents?: AgentInfo[]
+  /** mcp_servers_attached (C4): catalog ids the agent was equipped with. */
+  servers?: string[]
   status?: string
   task_type?: string
   last_response?: string

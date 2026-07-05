@@ -72,7 +72,25 @@ Rules:
 - `max_turns`: per-agent budget — 5-8 for small/mechanical subtasks, 15 standard, 25 only for
   large builds.
 - passive=true for Debugger only.
-- No markdown, no extra text outside the JSON."""
+- No markdown, no extra text outside the JSON.
+
+MCP servers (optional per-agent field `"mcp_servers": ["id", ...]`):
+__MCP_DIGEST__
+Assign servers ONLY when the subtask truly needs them. Most coding subtasks need NONE —
+workers already have file tools, bash, and git built in. Omit the field when unused."""
+
+
+def _mcp_digest() -> str:
+    """Compact catalog digest — stays in sync with backend/mcp/catalog.py."""
+    from backend.mcp.catalog import list_specs
+
+    return "\n".join(
+        f"- {s.id} ({s.label}; tags: {', '.join(s.tags)}): {s.when_to_use}"
+        for s in list_specs()
+    )
+
+
+_INSTRUCTIONS = _INSTRUCTIONS.replace("__MCP_DIGEST__", _mcp_digest())
 
 
 class TeamMember:
@@ -321,10 +339,25 @@ def _parse_composition_dict(data: dict) -> TeamComposition:
             files_hint = [str(f) for f in files_hint if str(f).strip()] or None
         raw_turns = member.get("max_turns")
         max_turns = max(1, min(int(raw_turns), 50)) if raw_turns else None
+
+        # C3: validate MCP server ids against the catalog — an unknown id
+        # is dropped with a warning rather than failing the whole plan.
+        mcp_servers: list[str] = []
+        for sid in member.get("mcp_servers") or []:
+            from backend.mcp.catalog import get_spec
+            sid = str(sid).strip()
+            if get_spec(sid):
+                mcp_servers.append(sid)
+            else:
+                logger.warning(
+                    "Planner assigned unknown MCP server %r — dropped", sid
+                )
+
         for _ in range(count):
             team.append(TeamMember(
                 role=role, model=model, count=1, passive=passive,
                 subtask=subtask, files_hint=files_hint, max_turns=max_turns,
+                mcp_servers=list(mcp_servers),
             ))
 
     return TeamComposition(

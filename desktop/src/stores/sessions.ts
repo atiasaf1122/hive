@@ -271,6 +271,22 @@ export const useSessions = create<State & Actions>((set, get) => ({
           ]
           break
         }
+        case 'mcp_servers_attached': {
+          // C4: what each agent was equipped with — also covered by
+          // spawn_complete's agent payload, but this survives WS replays
+          // where the spawn event predates the reconnect window.
+          const id = ev.agent_id
+          if (id && Array.isArray(ev.servers)) {
+            agents = {
+              ...agents,
+              [id]: {
+                ...(agents[id] ?? { agent_id: id, role: 'Worker', model: '', status: 'idle' }),
+                mcp_servers: ev.servers,
+              },
+            }
+          }
+          break
+        }
         case 'agent/start': {
           const id = ev.agent_id
           if (id) {

@@ -42,6 +42,8 @@ class MCPServerSpec:
     transport: str = "stdio"             # "stdio" | "http"
     url: str = ""                        # http transport
     headers: dict[str, str] = field(default_factory=dict)
+    # One-line planner guidance — rendered into the planner prompt digest.
+    when_to_use: str = ""
 
 
 CATALOG: dict[str, MCPServerSpec] = {
@@ -67,6 +69,11 @@ CATALOG: dict[str, MCPServerSpec] = {
                 "Real browser control + screenshots. First use downloads "
                 "browsers (~700MB) — expect a slow first run."
             ),
+            when_to_use=(
+                "ONLY for subtasks that verify UI in a real browser, e2e-test "
+                "a running web app, or scrape pages. NOT for writing frontend "
+                "code. Browser agents need claude:sonnet minimum (never haiku)."
+            ),
         ),
         MCPServerSpec(
             id="github",
@@ -81,6 +88,10 @@ CATALOG: dict[str, MCPServerSpec] = {
             tags=["github", "repo", "issues", "prs", "ci"],
             requires=["env:GITHUB_TOKEN"],
             notes="Hosted GitHub MCP — needs GITHUB_TOKEN (PAT).",
+            when_to_use=(
+                "When the subtask reads/creates GitHub issues or PRs, or "
+                "inspects CI runs. NOT for local git operations (built in)."
+            ),
         ),
         MCPServerSpec(
             id="context7",
@@ -91,6 +102,10 @@ CATALOG: dict[str, MCPServerSpec] = {
             tags=["docs", "libraries", "api-reference"],
             requires=["node>=20"],
             notes="Up-to-date library docs; free tier needs no key.",
+            when_to_use=(
+                "When working against a fast-moving library where stale "
+                "training data is a real risk. Otherwise skip."
+            ),
         ),
         MCPServerSpec(
             id="filesystem",
@@ -107,6 +122,10 @@ CATALOG: dict[str, MCPServerSpec] = {
             notes=(
                 "RARELY needed — workers already have Read/Write/Glob in "
                 "their cwd. Only for explicit cross-project access."
+            ),
+            when_to_use=(
+                "RARELY — only for explicit cross-project file access, with "
+                "the extra directory named in the subtask."
             ),
         ),
     ]
