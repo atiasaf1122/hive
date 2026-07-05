@@ -48,11 +48,18 @@ async def collect_git_context(
 
     changes: dict[str, GitFileChange] = {}
     try:
-        # Committed work this run: diff against the merge-base with main.
-        try:
-            base = (await _git(worktree_path, "merge-base", "HEAD", main_branch)).strip()
-        except RuntimeError:
-            base = ""
+        # Committed work this run: diff against the merge-base with the
+        # project's primary branch. Repos created by `git init` default to
+        # 'master' unless init.defaultBranch is set, so try both — the e2e
+        # dogfooding run false-negatived every claim on a master-named repo
+        # when only 'main' was checked.
+        base = ""
+        for candidate in dict.fromkeys((main_branch, "master", "main")):
+            try:
+                base = (await _git(worktree_path, "merge-base", "HEAD", candidate)).strip()
+                break
+            except RuntimeError:
+                continue
 
         if base:
             name_status = await _git(worktree_path, "diff", "--name-status", f"{base}..HEAD")

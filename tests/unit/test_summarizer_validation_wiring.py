@@ -271,3 +271,52 @@ async def test_llm_review_runs_opus_and_returns_notes() -> None:
     assert captured["model"] == "claude:opus"
     assert "app.py" in captured["prompt"]
     assert notes and "Merged a1" in notes[0]
+
+
+# ── collect_git_context against real repos (regression: master-named repos) ─
+
+
+async def _make_repo(path, branch: str) -> None:
+    import asyncio
+
+    async def git(*args):
+        proc = await asyncio.create_subprocess_exec(
+            "git", *args, cwd=str(path),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        await proc.communicate()
+
+    await git("init", "-b", branch)
+    await git("config", "user.name", "t")
+    await git("config", "user.email", "t@t")
+    (path / "README.md").write_text("hi\n")
+    await git("add", "-A")
+    await git("commit", "-m", "init")
+
+
+@pytest.mark.parametrize("branch", ["main", "master"])
+@pytest.mark.asyncio
+async def test_collect_git_context_finds_committed_work(tmp_path, branch) -> None:
+    """The e2e dogfooding run false-negatived every validation claim on a
+    master-named repo because the collector only tried 'main'."""
+    import asyncio
+
+    from backend.validation.context import collect_git_context
+
+    await _make_repo(tmp_path, branch)
+
+    async def git(*args):
+        proc = await asyncio.create_subprocess_exec(
+            "git", *args, cwd=str(tmp_path),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        await proc.communicate()
+
+    # Simulate an agent branch with a committed new file.
+    await git("checkout", "-b", "hive/s/agent-0")
+    (tmp_path / "app.py").write_text("print('hi')\n")
+    await git("add", "-A")
+    await git("commit", "-m", "agent output")
+
+    ctx = await collect_git_context(str(tmp_path))
+    paths = {c.path: c for c in ctx.git_changes}
+    assert "app.py" in paths, f"committed work invisible on {branch}-named repo"
+    assert paths["app.py"].is_new

@@ -595,6 +595,56 @@ navigational gain. Don't.
 
 # Progress log (newest first)
 
+## 2026-07-05 — Phase B "Make the swarm real" COMPLETE
+
+All seven sections implemented and committed (`0bc8756`..HEAD). 451 tests
+passing. End-to-end proof run: "Build a small Flask todo API with tests".
+
+- **B0 test isolation**: tests/conftest.py points HIVE_DIR at a temp dir
+  before any backend import; remaining hardcoded ~/.hive paths routed
+  through HIVE_DIR. Real hive.db mtime unchanged across a full suite run.
+- **B1 per-agent briefs (the core fix)**: planner emits one entry per agent
+  with subtask / files_hint / per-agent max_turns / model tier; legacy
+  count>1 expands at parse time; run_workers builds each agent its OWN
+  prompt (goal + request + subtask + file scope); skill retrieval keys off
+  the subtask; approval UI shows briefs.
+- **B2 context reuse**: agents.claude_session_id (ALTER-migrated) — first
+  spawn --session-id, re-spawn --resume; survives restarts.
+- **B3 summarizer wired**: one budgeted Haiku call per completed worker;
+  history carries the compact tier, full transcript stays in events;
+  outage degrades to truncated raw.
+- **B4 validators wired**: summarizer's CompletionReport checked against
+  real git state (new validation/context.py); passed_validation means
+  "claims verified", trust scores are honest; failures emit WS events and
+  annotate the summary. TestRun/PackageInstall validators deferred (their
+  evidence source died with Phase A's command-audit deletion).
+- **B5**: run loop uses hybrid_search (semantic+BM25+tags); orphaned
+  /api/skills/search/hybrid endpoint deleted.
+- **B6**: mechanical merge stays the fast path; Opus llm_review runs ONLY
+  on merge conflict or validation failure, in the project dir, resolving
+  aborted merges in place. summarize_results dead import removed.
+
+**E2E proof (session 75e32173)**: planner decomposed into Builder
+(app.py, "do NOT write tests — Tester owns those") + Tester (test_app.py,
+"do NOT modify app.py") — distinct subtasks, disjoint files, max_turns=15
+each. Both agents ran distinct prompts in parallel worktrees with distinct
+persisted claude session uuids and real PIDs; both merged (2 commits);
+final history carried compact Haiku summaries (raw transcripts: 13+33
+events in the DB); merged repo's pytest suite: 5/5 passing.
+
+**Dogfooding found + fixed a real bug**: validation false-negatived every
+claim because collect_git_context assumed a 'main' branch while git-init
+workspaces default to 'master' — and the B6 Opus escalation caught it
+exactly as designed, correctly diagnosing the false negatives and passing
+the turn. Root cause fixed (main/master fallback) + regression tests on
+both branch names.
+
+**Flags carried forward**: (1) conflict_resolvers.py (468 LOC heuristics)
+is still unwired — decide in Phase C/D whether llm_review should try it
+first or it should be deleted; (2) trust table absorbed 2 false-negative
+validation failures from the e2e run (cosmetic); (3) Phase C next: MCP
+execution (per-agent --mcp-config + capability registry + tool budget).
+
 ## 2026-07-05 — Phase A "Fix the foundation" COMPLETE
 
 All six sections implemented, tested, committed (`d0a6b61`..`a476836`), pushed
