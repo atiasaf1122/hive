@@ -1,6 +1,8 @@
 # HIVE Architecture Review & Roadmap — July 2026
 
-**Status: REVIEW DOCUMENT — no code changed. React, mark up, approve/reject per item.**
+**Status: LIVING DOCUMENT — original review below is unchanged; the progress
+log at the end tracks what has been implemented since. A copy of this file is
+auto-synced to the Windows Desktop as `HIVE_ARCHITECTURE_REVIEW_2026-07.txt`.**
 
 Reviewed at commit `d8d4766` (658 tests passing, clean tree). Scope: full walk of
 `backend/` (~20.5k LOC Python), `desktop/` (~9.5k LOC TS + 429 LOC Rust), `cli/`,
@@ -588,3 +590,48 @@ navigational gain. Don't.
 3. **Packaging/MSI (Phase 9D)**: confirm parking it (run from source / local build).
 4. **Roadmap order**: approve A → B → C → D, or pull C (MCP) ahead of B knowing it
    multiplies the same-prompt waste?
+
+---
+
+# Progress log (newest first)
+
+## 2026-07-05 — Phase A "Fix the foundation" COMPLETE
+
+All six sections implemented, tested, committed (`d0a6b61`..`a476836`), pushed
+to origin/main. 428 tests passing; desktop typechecks clean; verified
+end-to-end against a live backend (session create → real orchestrator reply →
+close → hard delete → 404).
+
+- **A1 session lifecycle**: `agents.pid` now written at spawn (stamped on
+  AGENT_START); new `idle` status + idempotent `reconcile_idle_sessions()` at
+  startup — the stuck-'active' sessions bug is fixed and the live DB was
+  reconciled (0 stray active rows). Discovered + fixed a deeper gap: no
+  runner-reattach path existed after restart, so added
+  `POST /sessions/{id}/resume` and auto-resume on `/message`. Crashed-agent
+  sessions now go `idle` (resumable), not `failed`.
+- **A2 model registry**: `backend/models.py` — opus→claude-opus-4-8,
+  sonnet→claude-sonnet-5, haiku→claude-haiku-4-5-20251001 (no Fable, being
+  removed from subscription). Verified the claude CLI resolves tier aliases
+  itself → aliases pass through, no dated-ID pinning. Stale `_resolve_model`
+  deleted; a test greps the source for retired IDs.
+- **A3 silent stall**: idle-timeout now yields AGENT_ERROR *and* the worker
+  kills the hung process group + skips AGENT_END (the review missed that
+  `proc.wait()` would hang one layer up). Breakers count the failure.
+- **A4 deletions**: security stack (848 LOC + router + UI + audit schema),
+  `frontend/`, quality_monitor, telemetry UI, `notify_at_burn_ratio`,
+  `_fetch_awesome`, `WorkerInput`, build artifacts, community-repo docs,
+  SUMMARY.md. Telegram parked (kept in-tree, not started, live path clean).
+  No command scanner replacement — worktree is the containment until a real
+  sandbox lands.
+- **A5**: real `DELETE /api/sessions/{id}` (rows + checkpoints + worktrees,
+  cancels live runner); UI only removes the card on backend success.
+- **A6**: version 0.9.0 everywhere (pyproject is the source, /health reads
+  metadata); CLAUDE.md rewritten to current reality; README honesty pass;
+  packaging/9D parked.
+
+Test delta 678 → 428: −255 tested deleted dead code, +25 new coverage.
+
+**Flags carried forward**: (1) tests write to the real `~/.hive/hive.db` —
+isolate via HIVE_DIR early in Phase B; (2) Phase B is next: per-agent subtask
+briefs, `--resume` context reuse, wire summarizer/validators/hybrid search,
+conflict-only LLM review.
