@@ -51,7 +51,7 @@ from backend.persistence.events import (
     write_event,
 )
 from backend.skills.injector import build_skill_context
-from backend.skills.registry import search as search_skills
+from backend.skills.registry import hybrid_search
 from backend.workers.base import EventType, WorkerConfig
 from backend.workers.claude_cli import ClaudeCLIWorker
 from backend.workers.ollama import OllamaWorker
@@ -809,11 +809,13 @@ async def _execute_worker(
         )
 
     # Skill retrieval keys off the agent's own brief — the subtask is a far
-    # sharper query than the shared session task ever was.
+    # sharper query than the shared session task ever was. B5: uses the
+    # hybrid ranker (semantic + BM25 + tag overlap) instead of plain cosine.
     skill_query = f"[{agent.role}] {agent.subtask or prompt[:300]}"
     skill_context = ""
     try:
-        relevant = await search_skills(skill_query, top_k=3)
+        hits = await hybrid_search(skill_query, top_k=3)
+        relevant = [h.skill for h in hits]
         skill_context = build_skill_context(relevant)
         if relevant:
             logger.info("Injecting %d skill(s) for agent %s", len(relevant), agent.agent_id)

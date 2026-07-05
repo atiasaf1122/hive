@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
+from types import SimpleNamespace
 
 from backend.persistence.db import init_db
 from backend.skills.embedder import cosine_similarity, deserialize, serialize
@@ -261,14 +262,17 @@ async def test_execute_worker_injects_skill_context(tmp_path, monkeypatch):
     monkeypatch.setattr(gmod, "update_agent_status", lambda *a, **k: _noop())
     monkeypatch.setattr("backend.orchestrator.graph.ClaudeCLIWorker", lambda: mock_worker)
 
-    async def fake_search(query, top_k=3, threshold=0.3, db_path=None):
-        return [Skill(id="pytest-guide", name="pytest-guide", description="Write tests",
-                      tags=[], path="", instructions="Use fixtures.")]
+    async def fake_search(query, top_k=3, **kw):
+        # B5: the run loop uses hybrid_search, which returns hits carrying
+        # a .skill attribute.
+        skill = Skill(id="pytest-guide", name="pytest-guide", description="Write tests",
+                      tags=[], path="", instructions="Use fixtures.")
+        return [SimpleNamespace(skill=skill)]
 
     def fake_build_context(skills):
         return skill_ctx
 
-    monkeypatch.setattr("backend.orchestrator.graph.search_skills", fake_search)
+    monkeypatch.setattr("backend.orchestrator.graph.hybrid_search", fake_search)
     monkeypatch.setattr("backend.orchestrator.graph.build_skill_context", fake_build_context)
 
     agent = SpawnedAgent(agent_id="ag1", role="Builder", model="claude:sonnet", worktree_path=str(tmp_path))
