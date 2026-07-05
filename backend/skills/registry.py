@@ -14,7 +14,9 @@ from backend.skills.embedder import cosine_similarity, deserialize, embed, seria
 
 logger = logging.getLogger(__name__)
 
-SKILLS_ROOT = Path.home() / ".hive" / "skills"
+from backend.persistence.db import HIVE_DIR
+
+SKILLS_ROOT = HIVE_DIR / "skills"
 
 _SKILL_TEMPLATE = """\
 ---

@@ -180,7 +180,8 @@ async def run_pipeline_now(pipeline_id: str) -> dict:
         raise HTTPException(status_code=404, detail="Pipeline not found")
 
     session_id = uuid.uuid4().hex[:8]
-    workspace = Path.home() / ".hive" / "sessions" / session_id
+    from backend.persistence.db import HIVE_DIR
+    workspace = HIVE_DIR / "sessions" / session_id
     workspace.mkdir(parents=True, exist_ok=True)
 
     await db_create_session(
@@ -201,7 +202,8 @@ async def webhook_trigger(token: str) -> dict:
         raise HTTPException(status_code=404, detail="No pipeline for this token")
 
     session_id = uuid.uuid4().hex[:8]
-    workspace = Path.home() / ".hive" / "sessions" / session_id
+    from backend.persistence.db import HIVE_DIR
+    workspace = HIVE_DIR / "sessions" / session_id
     workspace.mkdir(parents=True, exist_ok=True)
 
     await db_create_session(

@@ -32,7 +32,8 @@ async def _fire_pipeline(pipeline_id: str, db_path: Path = DB_PATH) -> None:
         return
 
     session_id = uuid.uuid4().hex[:8]
-    workspace = Path.home() / ".hive" / "sessions" / session_id
+    from backend.persistence.db import HIVE_DIR
+    workspace = HIVE_DIR / "sessions" / session_id
     workspace.mkdir(parents=True, exist_ok=True)
 
     await db_create_session(

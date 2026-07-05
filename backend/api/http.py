@@ -429,7 +429,8 @@ def _resolve_workspace_path(raw: str | None, session_id: str) -> str:
         # compatible with the old behaviour for callers that pass "".
         # (Pure missing field also lands here via the None branch.)
         if raw is None:
-            workspace = Path.home() / ".hive" / "sessions" / session_id
+            from backend.persistence.db import HIVE_DIR
+            workspace = HIVE_DIR / "sessions" / session_id
             workspace.mkdir(parents=True, exist_ok=True)
             return str(workspace)
         # An explicitly-empty string is almost always a UI bug (the chip
