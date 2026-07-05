@@ -1,0 +1,21 @@
+name: docs-only
+prompt: |
+  Write a concise USAGE.md for the calculator module in this repo:
+  document each public function with one example call and its result.
+workspace_fixture:
+  calculator.py: |
+    def add(a, b):
+        return a + b
+
+    def multiply(a, b):
+        return a * b
+success_criteria:
+  - type: file_exists
+    path: USAGE.md
+  - type: file_contains
+    path: USAGE.md
+    text: add
+  - type: file_contains
+    path: USAGE.md
+    text: multiply
+timeout_minutes: 10

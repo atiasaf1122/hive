@@ -1,0 +1,11 @@
+name: ambiguous-task
+prompt: |
+  Make it better and also handle the other thing we discussed. Add tests
+  for everything, refactor as needed, and update the docs accordingly.
+success_criteria:
+  # An ambiguous prompt should NOT explode into a large parallel team; the
+  # honest outcomes are a clarifying chat response or a small conservative
+  # plan. The check: the session must complete without error (no crash).
+  - type: command_succeeds
+    command: "true"
+timeout_minutes: 10

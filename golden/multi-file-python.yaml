@@ -1,0 +1,13 @@
+name: multi-file-python
+prompt: |
+  Create a Python CLI tool: wordstats/ package with cli.py (argparse:
+  `wordstats <file>` prints line/word/char counts) and counting logic in
+  core.py, plus a pytest suite for core.py.
+success_criteria:
+  - type: file_exists
+    path: wordstats/cli.py
+  - type: file_exists
+    path: wordstats/core.py
+  - type: command_succeeds
+    command: python3 -m pytest -q
+timeout_minutes: 20

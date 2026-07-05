@@ -69,6 +69,54 @@ def status() -> None:
     asyncio.run(_status_async())
 
 
+golden_app = typer.Typer(help="Golden regression suite (D5) — real models, real cost")
+app.add_typer(golden_app, name="golden")
+
+
+@golden_app.command("run")
+def golden_run(
+    only: str = typer.Option(None, "--only", help="Run a single spec by name"),
+) -> None:
+    """Execute golden specs through the real pipeline and diff vs last report."""
+
+    async def _run() -> int:
+        from backend.golden.runner import (
+            diff_reports,
+            load_specs,
+            previous_report,
+            run_spec,
+            write_report,
+        )
+
+        specs = load_specs(only=only)
+        if not specs:
+            typer.echo(f"No specs matched{f' --only {only}' if only else ''}.")
+            return 1
+        typer.echo(f"Running {len(specs)} golden spec(s) — real models, real cost.\n")
+        results = []
+        for spec in specs:
+            typer.echo(f"▶ {spec.name} …")
+            result = await run_spec(spec)
+            mark = "✓" if result["success"] else "✗"
+            typer.echo(
+                f"{mark} {spec.name}: {result['wall_seconds']:.0f}s, "
+                f"${result['cost_usd']:.2f}, {result['agents_spawned']} agent(s)"
+            )
+            for failure in result["failures"]:
+                typer.echo(f"    - {failure}")
+            results.append(result)
+
+        report_path = write_report(results)
+        current = __import__("json").loads(report_path.read_text())
+        prev = previous_report(before=report_path)
+        typer.echo(f"\nReport: {report_path}")
+        for line in diff_reports(current, prev):
+            typer.echo(line)
+        return 0 if all(r["success"] for r in results) else 1
+
+    raise typer.Exit(code=asyncio.run(_run()))
+
+
 @app.command()
 def doctor() -> None:
     """Live-check every MCP catalog server: spawn + initialize handshake (D0.3)."""

@@ -1,0 +1,15 @@
+name: tiny-fix
+prompt: |
+  In greet.py, the function greet() returns "helo" — fix the typo so it
+  returns "hello". Change nothing else.
+workspace_fixture:
+  greet.py: |
+    def greet():
+        return "helo"
+success_criteria:
+  - type: file_contains
+    path: greet.py
+    text: '"hello"'
+  - type: command_succeeds
+    command: python3 -c "from greet import greet; assert greet() == 'hello'"
+timeout_minutes: 8

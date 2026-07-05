@@ -1,0 +1,14 @@
+name: flask-todo-api
+prompt: |
+  Build a small Flask todo API with tests: app.py with GET/POST/DELETE
+  /todos endpoints (in-memory store), and a pytest test suite covering all
+  three endpoints.
+success_criteria:
+  - type: file_exists
+    path: app.py
+  - type: file_contains
+    path: app.py
+    text: /todos
+  - type: command_succeeds
+    command: python3 -m pytest -q
+timeout_minutes: 20

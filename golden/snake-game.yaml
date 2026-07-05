@@ -1,0 +1,12 @@
+name: snake-game
+prompt: |
+  Build a playable snake game as a single index.html (canvas + JS): arrow
+  keys steer, eating food grows the snake and raises the score, hitting a
+  wall or yourself ends the game with a restart option.
+success_criteria:
+  - type: file_exists
+    path: index.html
+  - type: file_contains
+    path: index.html
+    text: canvas
+timeout_minutes: 20
