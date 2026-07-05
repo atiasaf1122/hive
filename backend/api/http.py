@@ -261,6 +261,10 @@ async def _session_runner(
                 "session_id": session_id,
                 "status": "closed",
             })
+            # D1: distill lessons from this session's evidence + close the
+            # confirm/archive loop for lessons injected into it. Fire and
+            # forget — learning must never delay the user's close.
+            asyncio.create_task(_run_lesson_pipeline(session_id, project_path))
         else:
             # Graph reached END without the user closing. Most likely a
             # graph routing bug (e.g. user_closed state lingering from a
@@ -303,6 +307,22 @@ async def _session_runner(
             except Exception as exc:
                 logger.warning("Could not mark approval %s expired: %s", corr_id, exc)
         _pending_inputs.pop(session_id, None)
+
+
+async def _run_lesson_pipeline(session_id: str, project_path: str | None) -> None:
+    """Session-close learning pass (D1). Never raises."""
+    try:
+        from backend.lessons.service import (
+            distill_session_lessons,
+            run_session_hygiene,
+        )
+        await run_session_hygiene(session_id)
+        saved = await distill_session_lessons(session_id, project_path)
+        if saved:
+            logger.info("Session %s distilled %d lesson(s): %s",
+                        session_id, len(saved), saved)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Lesson pipeline failed for %s: %s", session_id, exc)
 
 
 def launch_session(

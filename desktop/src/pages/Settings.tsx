@@ -27,6 +27,7 @@ import {
   SettingsLayout,
   type SettingsTab,
 } from '../components/settings/SettingsLayout'
+import { LessonsPanel } from '../components/settings/LessonsPanel'
 import { SafetyPanel } from '../components/settings/SafetyPanel'
 
 /** `costly` worker picks trigger a confirm() prompt — HIVE invariant #7
@@ -57,6 +58,7 @@ export function Settings() {
       {tab === 'ai' && <AIPanel />}
       {tab === 'routing' && <RoutingPanel />}
       {tab === 'safety' && <SafetyPanel />}
+      {tab === 'lessons' && <LessonsPanel />}
       {tab === 'integrations' && <IntegrationsPanel />}
       {tab === 'advanced' && <AdvancedPanel />}
     </SettingsLayout>

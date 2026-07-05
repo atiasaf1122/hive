@@ -13,6 +13,7 @@ from backend.api.detection_http import router as detection_router
 from backend.api.http import router as http_router
 from backend.api.install_http import router as install_router
 from backend.api.lifecycle_http import router as lifecycle_router
+from backend.api.lessons_http import router as lessons_router
 from backend.api.mcp_http import router as mcp_router
 from backend.api.pipelines_http import router as pipelines_router
 from backend.api.preflight_http import router as preflight_router
@@ -100,6 +101,7 @@ app.include_router(usage_router)
 app.include_router(detection_router)
 app.include_router(lifecycle_router)
 app.include_router(mcp_router)
+app.include_router(lessons_router)
 app.include_router(preflight_router)
 app.include_router(safety_router)
 app.include_router(validation_router)

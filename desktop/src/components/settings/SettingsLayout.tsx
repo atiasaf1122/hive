@@ -23,6 +23,7 @@ export type SettingsTab =
   | 'ai'
   | 'routing'
   | 'safety'
+  | 'lessons'
   | 'integrations'
   | 'advanced'
 
@@ -50,6 +51,7 @@ const NAV: NavGroup[] = [
     group: 'Safety',
     items: [
       { id: 'safety', label: 'Limits & breakers', icon: IconShieldCheck },
+      { id: 'lessons', label: 'Lessons', icon: IconBrain },
     ],
   },
   {

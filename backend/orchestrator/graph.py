@@ -368,6 +368,25 @@ async def run_workers_node(state: GraphState) -> dict:
 
     async def _run_one(agent: SpawnedAgent) -> tuple[str, AgentResult]:
         prompt = _build_agent_prompt(agent, goal=goal, pending=pending)
+        # D1.4: conservative lesson retrieval — a HIGH similarity bar means
+        # zero injections is the normal outcome. Max 3, same-project first.
+        try:
+            from backend.lessons.store import (
+                record_application,
+                render_lessons_section,
+                retrieve_lessons,
+            )
+            lessons = await retrieve_lessons(
+                f"{agent.role}: {agent.subtask or pending}",
+                project_path=state.get("project_path"),
+            )
+            if lessons:
+                prompt += "\n\n" + render_lessons_section(lessons)
+                for lesson in lessons:
+                    await record_application(session_id, lesson.id, agent.agent_id)
+                logger.info("Injected %d lesson(s) for %s", len(lessons), agent.agent_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Lesson retrieval skipped: %s", exc)
         max_turns = agent.max_turns or default_max_turns
         async with semaphore:
             return agent.agent_id, await _execute_worker(agent, prompt, session_id, max_turns)
@@ -417,6 +436,16 @@ async def review_node(state: GraphState) -> dict:
         })
         notes = await llm_review(plan=plan, report=report, results=results)
         report.notes.extend(notes)
+        try:
+            await write_event(HiveEvent(
+                type=EventType.REVIEW_LLM,
+                agent_id="reviewer", session_id=state["session_id"],
+                raw_payload={"notes": notes,
+                             "conflicts": len(report.conflicts),
+                             "validation_failures": any_validation_failed},
+            ))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Event write failed: %s", exc)
 
     total_in = sum(r["input_tokens"] for r in results.values())
     total_out = sum(r["output_tokens"] for r in results.values())
@@ -1083,6 +1112,17 @@ async def _execute_worker(
                     "Validation FAILED for %s: %s",
                     agent.agent_id, result["validation_findings"],
                 )
+                # D1 evidence: persist the diagnosis — lessons are distilled
+                # from these events at session close.
+                try:
+                    await write_event(HiveEvent(
+                        type=EventType.VALIDATION_FAILED,
+                        agent_id=agent.agent_id, session_id=session_id,
+                        origin="agent",
+                        raw_payload={"findings": result["validation_findings"]},
+                    ))
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("Event write failed: %s", exc)
                 await _emit_to_ws(session_id, {
                     "type": "validation_failed",
                     "session_id": session_id,

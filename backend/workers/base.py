@@ -15,6 +15,11 @@ class EventType(StrEnum):
     AGENT_ERROR = "agent/error"
     MCP_ATTACHED = "mcp/attached"  # orchestrator-emitted: servers equipped at spawn
 
+    # Phase D — persisted orchestrator events (learning-loop evidence)
+    VALIDATION_FAILED = "validation/failed"
+    REVIEW_LLM = "review/llm"
+    LESSON_DISCARDED = "lesson/discarded"
+
     # Content
     TEXT_DELTA = "text/delta"
     TEXT_DONE = "text/done"

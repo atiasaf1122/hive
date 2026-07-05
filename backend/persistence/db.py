@@ -131,6 +131,41 @@ CREATE TABLE IF NOT EXISTS worker_trust_scores (
     last_updated           DATETIME NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Phase D (learning loop) — durable procedural lessons distilled from
+-- objective evidence only (validator diagnoses, llm_review resolutions,
+-- concrete error payloads). Never from an agent's own failure narrative.
+CREATE TABLE IF NOT EXISTS lessons (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope TEXT NOT NULL,              -- 'project' | 'global'
+    project_path TEXT,                -- set when scope='project'
+    title TEXT NOT NULL,              -- concise pitfall name
+    description TEXT NOT NULL,        -- one sentence
+    content TEXT NOT NULL,            -- 1-3 sentences: pitfall + avoidance
+    trigger_context TEXT NOT NULL,    -- what situations this applies to (retrieval)
+    origin TEXT NOT NULL,             -- 'agent' | 'infrastructure'
+    source_session TEXT NOT NULL,
+    source_evidence TEXT NOT NULL,    -- the objective evidence it came from
+    embedding BLOB,
+    times_applied INTEGER DEFAULT 0,
+    times_confirmed INTEGER DEFAULT 0,   -- applied AND failure did not recur
+    times_unconfirmed INTEGER DEFAULT 0, -- applied AND failure recurred anyway
+    last_applied_at TEXT,
+    status TEXT DEFAULT 'active',     -- 'active' | 'archived'
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- One row per lesson injection, so session close can check whether the
+-- warned-about failure class recurred (hygiene loop D1.5).
+CREATE TABLE IF NOT EXISTS lesson_applications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    lesson_id INTEGER NOT NULL REFERENCES lessons(id),
+    agent_id TEXT NOT NULL,
+    resolved INTEGER DEFAULT 0,       -- hygiene pass processed this row
+    created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_lesson_apps_session ON lesson_applications(session_id);
+
 -- Persistent approval queue (invariant #5: correlation IDs survive restart).
 -- Without this, every team_approval / awaiting_input interrupt that the user
 -- hasn't yet answered is silently dropped on backend restart, and the
