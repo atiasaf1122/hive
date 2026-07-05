@@ -71,6 +71,8 @@ export interface InterruptPayload {
   confidence?: number
   reason?: string
   last_response?: string
+  /** D2: plan-quality gate result — issues shown before the user approves. */
+  plan_check?: { score: number; issues: string[]; passed: boolean } | null
 }
 
 /* ── Live WS events (loose — only the fields we read are typed) ───────── */

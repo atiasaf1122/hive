@@ -108,19 +108,37 @@ async def orchestrator_node(state: GraphState) -> dict:
         project_path=state.get("project_path") or state.get("worktree_path"),
     )
 
-    composition_dict = {
-        "team": [
-            {
-                "role": m.role, "model": m.model, "count": m.count,
-                "passive": m.passive, "subtask": m.subtask,
-                "files_hint": m.files_hint, "max_turns": m.max_turns,
-                "mcp_servers": getattr(m, "mcp_servers", []),
-            }
-            for m in decision.composition.team
-        ],
-        "confidence": decision.composition.confidence,
-        "rationale": decision.composition.rationale,
-    }
+    composition_dict = _composition_to_dict(decision.composition)
+
+    # D2: plan-quality gate — score before spawn/approval so the result is
+    # visible in the approval modal. One automatic revision round max; the
+    # gate fails open, the user always decides.
+    if decision.has_active_team:
+        from backend.orchestrator.plan_gate import score_plan
+
+        check = await score_plan(composition_dict, message, session_id=state["session_id"])
+        if not check.passed:
+            logger.warning("Plan gate flagged (score %d): %s", check.score, check.issues)
+            revised = await orchestrate(
+                message=(
+                    f"{message}\n\n[Plan reviewer feedback — revise your team plan "
+                    f"to fix these issues, or justify keeping it]\n"
+                    + "\n".join(f"- {i}" for i in check.issues)
+                ),
+                session_id=state["session_id"],
+                history=history[:-1],
+                project_path=state.get("project_path") or state.get("worktree_path"),
+            )
+            if revised.has_active_team:
+                decision = revised
+                composition_dict = _composition_to_dict(decision.composition)
+                check = await score_plan(composition_dict, message, session_id=state["session_id"])
+        composition_dict["plan_check"] = check.to_dict()
+        await _emit_to_ws(state["session_id"], {
+            "type": "plan_check",
+            "session_id": state["session_id"],
+            **check.to_dict(),
+        })
 
     await _emit_to_ws(state["session_id"], {
         "type": "orchestrator_decision",
@@ -134,6 +152,22 @@ async def orchestrator_node(state: GraphState) -> dict:
         "team_composition": composition_dict,
         "last_response": decision.response,
         "conversation_history": history,
+    }
+
+
+def _composition_to_dict(composition) -> dict:
+    return {
+        "team": [
+            {
+                "role": m.role, "model": m.model, "count": m.count,
+                "passive": m.passive, "subtask": m.subtask,
+                "files_hint": m.files_hint, "max_turns": m.max_turns,
+                "mcp_servers": getattr(m, "mcp_servers", []),
+            }
+            for m in composition.team
+        ],
+        "confidence": composition.confidence,
+        "rationale": composition.rationale,
     }
 
 
@@ -179,7 +213,12 @@ async def approval_node(state: GraphState) -> dict:
     confidence = float(comp.get("confidence", 1.0))
 
     low_confidence = confidence < 0.7
-    needs_approval = mode in ("checkpoint", "manual") or (mode == "full-auto" and low_confidence)
+    plan_check = comp.get("plan_check") or {}
+    plan_flagged = plan_check and not plan_check.get("passed", True)
+    needs_approval = (
+        mode in ("checkpoint", "manual")
+        or (mode == "full-auto" and (low_confidence or plan_flagged))
+    )
 
     if not needs_approval:
         return {}
@@ -188,7 +227,11 @@ async def approval_node(state: GraphState) -> dict:
         "type": "team_approval",
         "team_composition": comp,
         "confidence": confidence,
-        "reason": "low_confidence" if low_confidence else "approval_mode",
+        "plan_check": plan_check or None,
+        "reason": (
+            "plan_check" if plan_flagged
+            else ("low_confidence" if low_confidence else "approval_mode")
+        ),
     })
 
     if not response.get("approved", True):

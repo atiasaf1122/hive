@@ -258,6 +258,18 @@ function ApprovalCard({ sessionId, payload }: { sessionId: string; payload: Inte
             )}
           </>
         )}
+        {payload.plan_check && !payload.plan_check.passed && (
+          <div className="mb-3 rounded-soft bg-amber-500/10 border border-amber-500/30 p-2.5">
+            <div className="text-xs font-medium text-amber-500 mb-1">
+              ⚠ Plan check: score {payload.plan_check.score}/10
+            </div>
+            <ul className="text-xs text-ink-muted space-y-0.5">
+              {payload.plan_check.issues.map((issue, i) => (
+                <li key={i}>• {issue}</li>
+              ))}
+            </ul>
+          </div>
+        )}
         <div className="flex items-center gap-2">
           <button
             type="button"
