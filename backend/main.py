@@ -38,6 +38,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _version() -> str:
+    """Single source of truth is pyproject.toml (installed metadata)."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("hive")
+    except PackageNotFoundError:
+        return "0.0.0-dev"  # running from source without an editable install
+
+
+VERSION = _version()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await init_db(DB_PATH)
@@ -54,7 +67,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 app = FastAPI(
     title="HIVE",
-    version="0.6.0",
+    version=VERSION,
     description="AI agent swarm orchestration",
     lifespan=lifespan,
 )
@@ -96,4 +109,4 @@ app.include_router(summarizer_router)
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "version": "0.6.0"}
+    return {"status": "ok", "version": VERSION}

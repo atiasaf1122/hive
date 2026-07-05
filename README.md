@@ -7,8 +7,9 @@ specialist agents, or both. Each agent runs in its own git worktree.
 A **Reviewer** merges the work back to main. Sessions stay open for as
 long as you want them — you talk to the orchestrator like a colleague.
 Cron-scheduled and webhook-triggered pipelines turn one-off tasks into
-recurring automation. A Telegram bot lets you steer projects from your
-phone. A Tauri 2 desktop shell wraps the whole thing in a native window.
+recurring automation. A Tauri 2 desktop shell wraps the whole thing in a
+native window. (A Telegram bot for phone approvals exists but is parked —
+see CLAUDE.md.)
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
@@ -22,10 +23,10 @@ phone. A Tauri 2 desktop shell wraps the whole thing in a native window.
 
 | | |
 |---|---|
-| Backend tests | **599** (`pytest tests/`) |
+| Backend tests | **428** (`pytest tests/`) |
 | Frontend | Tauri 2 + React 18 + Vite + TypeScript + TailwindCSS |
 | Backend | Python 3.11+, FastAPI + uvicorn, LangGraph 1.x, SQLite (WAL) |
-| Status | v1.0-rc work in progress — see [SUMMARY.md](./SUMMARY.md) for the live build log |
+| Status | v0.9 personal tool — roadmap in [docs/ARCHITECTURE_REVIEW_2026-07.md](./docs/ARCHITECTURE_REVIEW_2026-07.md) |
 
 ---
 
@@ -81,8 +82,8 @@ If you only want the web preview:
 cd desktop && npm run dev    # plain Vite on http://localhost:1420
 ```
 
-For production builds see [packaging/BUILD.md](./packaging/BUILD.md) — the
-Tauri `.msi` / `.dmg` / `.AppImage` flow.
+Packaged builds (`.msi` etc.) are PARKED — HIVE is a run-from-source
+personal tool. The someday-runbook lives at [packaging/BUILD.md](./packaging/BUILD.md).
 
 ---
 
@@ -118,16 +119,11 @@ hive pipelines run <id>       # fire immediately
 hive pipelines runs <id>      # past run history
 ```
 
-### Telegram
+### Telegram (parked)
 
-```bash
-hive telegram setup --token <bot-token>     # from @BotFather
-hive telegram allow <chat-id>
-hive start                                  # bot starts with backend
-```
-
-In Telegram: `/sessions`, `/attach <id>`, free-text chat to the
-orchestrator, inline ✓ / ✗ buttons for approvals, `/close`.
+The bot code is kept in `backend/telegram/` but no longer starts with the
+backend. Restore the `start_bot()` lifespan call in `backend/main.py`
+(git history: Phase 7) to re-enable it.
 
 ### Skills
 
@@ -146,23 +142,21 @@ the optional Haiku rerank gate is wired through `?session_id=<id>`.
 
 ## Safety & Security
 
-HIVE ships three layers of guard-rails the orchestrator enforces:
+Honest posture for a single-user local tool: workers run the `claude`
+CLI with `--dangerously-skip-permissions`, so the **git worktree is the
+containment boundary** — a real sandbox (bwrap/container) is a future
+roadmap item. What IS enforced today:
 
-1. **Command policy** (`backend/security/command_policy.py`) — every
-   shell command an agent issues is classified `allowed` / `confirmed`
-   / `blocked` against pattern lists. `ALWAYS_BLOCKED` patterns cannot
-   be overridden even in BLIND_AUTO mode.
-2. **Hard stops** (`backend/safety/hard_stops.py`) — non-overridable
-   ceilings on a single autonomous run: token budget, duration,
-   concurrent agents, same-file edits, VRAM, disk.
-   Per-session overrides (`backend/safety/overrides.py`) let users
-   tighten or loosen the defaults under explicit accept-responsibility.
-3. **Validation stack** (`backend/validation/`) — every worker
-   completion runs the deterministic validators (file existence, git
-   diff, tests in audit log) before the agent's worktree is released.
-   An optional Haiku semantic cross-check
-   (`backend/llm/haiku.py` + `POST /api/validation/cross-check`) scores
-   how well the worker's evidence backs its claim.
+1. **Hard stops** (`backend/safety/hard_stops.py`) — ceilings on a
+   single autonomous run: token budget, duration, concurrent agents,
+   same-file edits. Per-session overrides
+   (`backend/safety/overrides.py`) tighten or loosen the defaults.
+2. **Circuit breakers** (`backend/safety/circuit_breaker.py`) — a
+   worker that keeps failing gets skipped until its breaker half-opens.
+3. **Trust scores** (`backend/validation/trust.py`) — per-model
+   completion bookkeeping. (The deterministic validators in
+   `backend/validation/validators.py` exist but aren't wired into the
+   run loop yet — Phase B.)
 
 See [SECURITY.md](./SECURITY.md) for the vulnerability-reporting policy.
 
@@ -198,12 +192,9 @@ Override the data dir with `HIVE_DIR=/path/to/store`.
 ## Documentation
 
 - **[ARCHITECTURE.md](./ARCHITECTURE.md)** — full design walkthrough + all ADRs.
-- **[SUMMARY.md](./SUMMARY.md)** — phase-by-phase build log (newest first).
-- **[CONTRIBUTING.md](./CONTRIBUTING.md)** — how to set up a dev env and propose changes.
-- **[SECURITY.md](./SECURITY.md)** — vulnerability-reporting policy.
-- **[CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)** — community standards.
+- **[docs/ARCHITECTURE_REVIEW_2026-07.md](./docs/ARCHITECTURE_REVIEW_2026-07.md)** — current assessment + A→B→C→D roadmap.
 - **[CLAUDE.md](./CLAUDE.md)** — instructions for Claude Code working on HIVE itself.
-- **[HIVE_BUILD_PLAN.md](./HIVE_BUILD_PLAN.md)** — original spec (Hebrew).
+- **[HIVE_BUILD_PLAN.md](./HIVE_BUILD_PLAN.md)** — original spec (Hebrew, historical).
 
 ---
 
