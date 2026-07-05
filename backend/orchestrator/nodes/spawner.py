@@ -34,6 +34,9 @@ class SpawnedAgent:
     max_turns: int | None = None  # None → inherit the session default
     # C2/C3: MCP servers assigned by the planner (catalog ids).
     mcp_servers: list[str] = field(default_factory=list)
+    # D4: execution wave (file-overlap sequencing) + who ran before.
+    wave: int = 0
+    predecessor_note: str = ""
 
 
 @dataclass
@@ -102,6 +105,8 @@ async def spawn_agents(
             files_hint=getattr(member, "files_hint", None),
             max_turns=getattr(member, "max_turns", None),
             mcp_servers=list(getattr(member, "mcp_servers", []) or []),
+            wave=int(getattr(member, "wave", 0) or 0),
+            predecessor_note=str(getattr(member, "predecessor_note", "") or ""),
         )
 
     results = await asyncio.gather(*[_create_one(m, i) for m, i in all_members])

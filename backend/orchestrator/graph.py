@@ -405,6 +405,9 @@ def _build_agent_prompt(agent: SpawnedAgent, goal: str, pending: str) -> str:
     parts.append(f"## Your subtask\n{agent.subtask or pending}")
     if agent.files_hint:
         parts.append("## Files in your scope\n" + "\n".join(f"- {f}" for f in agent.files_hint))
+    if agent.predecessor_note:
+        # D4: sequenced agent — tell it whose work precedes it this turn.
+        parts.append(f"## Predecessor work\n{agent.predecessor_note}")
     if agent.mcp_servers:
         # C5 lesson: without this, an equipped agent doesn't know its MCP
         # tools exist and reinstalls the capability from scratch via Bash.
@@ -473,8 +476,15 @@ async def run_workers_node(state: GraphState) -> dict:
         async with semaphore:
             return agent.agent_id, await _execute_worker(agent, prompt, session_id, max_turns)
 
-    pairs = await asyncio.gather(*[_run_one(a) for a in active])
-    return {"worker_results": {aid: res for aid, res in pairs}}
+    # D4: file-overlap sequencing — agents in wave N run only after every
+    # lower wave finished (their predecessors' commits are then readable on
+    # the shared object store via the hive/<session>/ branches).
+    results: dict[str, AgentResult] = {}
+    for wave in sorted({a.wave for a in active}):
+        wave_agents = [a for a in active if a.wave == wave]
+        pairs = await asyncio.gather(*[_run_one(a) for a in wave_agents])
+        results.update({aid: res for aid, res in pairs})
+    return {"worker_results": results}
 
 
 async def review_node(state: GraphState) -> dict:
@@ -1255,6 +1265,7 @@ def _agent_to_dict(a: SpawnedAgent) -> dict:
         "worktree_path": a.worktree_path, "passive": a.passive, "branch": a.branch,
         "subtask": a.subtask, "files_hint": a.files_hint, "max_turns": a.max_turns,
         "mcp_servers": a.mcp_servers,
+        "wave": a.wave, "predecessor_note": a.predecessor_note,
     }
 
 
@@ -1266,4 +1277,6 @@ def _dict_to_agent(d: dict) -> SpawnedAgent:
         subtask=d.get("subtask", ""), files_hint=d.get("files_hint"),
         max_turns=d.get("max_turns"),
         mcp_servers=d.get("mcp_servers") or [],
+        wave=int(d.get("wave") or 0),
+        predecessor_note=d.get("predecessor_note") or "",
     )

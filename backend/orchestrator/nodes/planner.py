@@ -68,7 +68,8 @@ Rules:
   angles): then give each agent the same question but a DISTINCT lens, stated in its subtask.
 - `files_hint`: files/dirs this agent will touch. Two agents must NOT list the same file — if
   they would, merge them into one agent, sequence the work across turns, or make one a reviewer
-  of the other's output.
+  of the other's output. Overlapping hints are enforced mechanically: same-role overlaps get
+  merged into one agent, different-role overlaps get sequenced — plan disjoint to stay parallel.
 - `max_turns`: per-agent budget — 5-8 for small/mechanical subtasks, 15 standard, 25 only for
   large builds.
 - passive=true for Debugger only.
@@ -112,6 +113,8 @@ class TeamMember:
         files_hint: list[str] | None = None,
         max_turns: int | None = None,
         mcp_servers: list[str] | None = None,
+        wave: int = 0,
+        predecessor_note: str = "",
     ) -> None:
         self.role = role
         self.model = model
@@ -121,6 +124,11 @@ class TeamMember:
         self.files_hint = files_hint
         self.max_turns = max_turns
         self.mcp_servers = mcp_servers or []
+        # D4: execution wave — wave>0 runs after all lower waves complete
+        # (file-overlap sequencing). predecessor_note tells the agent whose
+        # branch to look at.
+        self.wave = wave
+        self.predecessor_note = predecessor_note
 
     def __repr__(self) -> str:
         return (
@@ -367,11 +375,87 @@ def _parse_composition_dict(data: dict) -> TeamComposition:
                 mcp_servers=list(mcp_servers),
             ))
 
+    _resolve_file_overlaps(team)
+
     return TeamComposition(
         team=team,
         confidence=float(data.get("confidence", 0.7)),
         rationale=data.get("rationale", ""),
     )
+
+
+def _norm_hint(hint: str) -> str:
+    return hint.strip().replace("\\", "/").lstrip("./").rstrip("/")
+
+
+def _hints_overlap(a: str, b: str) -> bool:
+    import fnmatch
+
+    a, b = _norm_hint(a), _norm_hint(b)
+    if not a or not b:
+        return False
+    if a == b or a.startswith(b + "/") or b.startswith(a + "/"):
+        return True
+    return fnmatch.fnmatch(a, b) or fnmatch.fnmatch(b, a)
+
+
+def _members_overlap(m1: TeamMember, m2: TeamMember) -> list[str]:
+    hits = []
+    for h1 in m1.files_hint or []:
+        for h2 in m2.files_hint or []:
+            if _hints_overlap(h1, h2):
+                hits.append(h2)
+    return hits
+
+
+def _resolve_file_overlaps(team: list[TeamMember]) -> None:
+    """D4: no two agents may run in parallel on intersecting files_hint.
+
+    Mechanical and free — the semantic sibling lives in the D2 plan gate.
+    Same-role overlap → merge the later brief into the earlier agent (one
+    agent doing both can't conflict with itself). Different roles →
+    sequentialize: the later agent moves to the next wave and is told whose
+    branch to consult. Empty/vague hints are exempt (don't fake precision).
+    """
+    merged_away: set[int] = set()
+    active = [i for i, m in enumerate(team) if not m.passive]
+    for j_pos, j in enumerate(active):
+        if j in merged_away:
+            continue
+        for i in active[:j_pos]:
+            if i in merged_away:
+                continue
+            first, second = team[i], team[j]
+            hits = _members_overlap(first, second)
+            if not hits:
+                continue
+            if first.role == second.role:
+                # Merge: one agent owns both briefs.
+                first.subtask = (
+                    f"{first.subtask}\n\nAdditionally: {second.subtask}"
+                    if second.subtask else first.subtask
+                )
+                first.files_hint = sorted(
+                    {*(first.files_hint or []), *(second.files_hint or [])})
+                first.max_turns = max(first.max_turns or 0, second.max_turns or 0) or None
+                first.mcp_servers = sorted({*first.mcp_servers, *second.mcp_servers})
+                merged_away.add(j)
+                logger.warning(
+                    "Plan overlap on %s: merged duplicate %s briefs into one agent",
+                    hits, first.role)
+            else:
+                second.wave = max(second.wave, first.wave + 1)
+                second.predecessor_note = (
+                    f"A {first.role} agent works on {', '.join(hits)} before you "
+                    f"in this turn; its commits are on its hive/<session>/ branch "
+                    f"— read them (git branch -a; git show) before starting."
+                )
+                logger.warning(
+                    "Plan overlap on %s: %s sequenced after %s (wave %d)",
+                    hits, second.role, first.role, second.wave)
+            break
+    for j in sorted(merged_away, reverse=True):
+        del team[j]
 
 
 def _extract_first_json_object(text: str) -> dict | None:
