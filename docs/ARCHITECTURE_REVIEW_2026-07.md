@@ -595,6 +595,66 @@ navigational gain. Don't.
 
 # Progress log (newest first)
 
+## 2026-07-05 — Phase C "MCP execution" COMPLETE
+
+Eyes and hands via integration, not building: agents can now drive real
+browsers (and reach GitHub/docs servers) through per-agent MCP configs.
+456 tests passing. Server-level management only, per the design decision —
+Claude Code's own MCP client handles tool loading.
+
+- **C0**: conflict_resolvers.py deleted (468 LOC + 18 tests) — B6's Opus
+  llm_review owns conflicts.
+- **C1**: backend/mcp/catalog.py — 4 curated servers (playwright, github
+  [hosted remote; the npm server is deprecated upstream], context7,
+  filesystem [worktree-scoped]), placeholder + ${ENV} expansion, preflight
+  (node>=20, env vars), GET /api/mcp/catalog.
+- **C2**: per-agent --mcp-config + --strict-mcp-config (no global-server
+  leakage, verified flag); configs under HIVE_DIR/mcp-configs (outside the
+  worktree so auto-commit can't sweep secrets into merges); preflight
+  fails spawns FAST with the missing requirement named; MCP_ATTACHED
+  events; process-group teardown reaps MCP children (verified: no orphans).
+- **C3**: planner assigns servers per agent from a catalog-synced digest
+  with restraint guidance; unknown ids dropped with warning; 🔌 chips in
+  approval cards (pre-approval), team checklist, and agent pills;
+  re-engagement (add server on respawn) composes with B2 --resume.
+- **C5 e2e (color-palette generator + real-browser verification)**: the
+  planner put playwright on the Tester ONLY; the Tester navigated to the
+  built page via file://, clicked Generate, verified 5 distinct swatches,
+  and merged a screenshot as evidence (hex labels in the PNG match its
+  report). Review success: true. No orphan processes after close.
+
+**Dogfooding found + fixed FIVE integration bugs** (each e2e run peeled
+one layer; the last two came from probing the MCP over raw stdio instead
+of burning more swarm runs):
+1. @playwright/mcp rejects --user-data-dir in --isolated mode — server
+   crashed at startup; --isolated alone IS the per-agent isolation.
+2. Equipped agents weren't TOLD about their tools → the Tester
+   npm-installed Playwright from scratch. Agent prompts now carry an
+   "## Equipment" section.
+3. Validation false-positived on absolute-vs-relative claim paths
+   (+ a latent lstrip('./') bug that ate leading '/').
+4. The MCP defaults to the system Chrome channel — absent on WSL;
+   --browser chromium added.
+5. Browsers must come from the MCP's OWN installer
+   (install-browser chrome-for-testing); standalone playwright installs
+   a mismatched build.
+
+**Token overhead (C5 measurement)**: the playwright-equipped Tester cost
+$0.41 vs the plain Builder's $0.10 (~4×; output tokens ~2.8×: 3073 vs
+1110) — tool schemas + page snapshots are the overhead. Confirms the
+restraint guidance: attach browsers only where the subtask needs them.
+Haiku summarizer runs cost ~$0.02-0.03 each.
+
+**Flags for Phase D (META layer)**: (1) the "claude exited 1 (no stderr)"
+failure mode appeared in every failed Tester run — worth a first-class
+diagnosis path (capture stderr tail into the agent error); (2) trust
+scores absorbed several failures from HIVE's own integration bugs, not
+worker faults — META's failure clustering should distinguish
+infrastructure errors from agent errors; (3) MCP server startup health
+isn't checked before the agent runs — a doctor-style "server starts and
+answers initialize" preflight would have caught bugs 1/4/5 without any
+agent run.
+
 ## 2026-07-05 — Phase B "Make the swarm real" COMPLETE
 
 All seven sections implemented and committed (`0bc8756`..HEAD). 451 tests
