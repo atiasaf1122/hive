@@ -16,6 +16,7 @@ import { TabBar } from '../components/project/TabBar'
 import { AgentsBar } from '../components/project/AgentsBar'
 import { AgentDrillDown } from '../components/project/AgentDrillDown'
 import { Chat } from '../components/project/Chat'
+import { TrajectoryView } from '../components/project/TrajectoryView'
 import { Composer } from '../components/project/Composer'
 import { SafetyOverrideModal } from '../components/project/SafetyOverrideModal'
 import { api } from '../lib/api'
@@ -37,6 +38,8 @@ export function ProjectView() {
   const closeTab = useProjectTabs((s) => s.closeTab)
   const saveTemplate = useTemplates((s) => s.save)
   const [safetyOpen, setSafetyOpen] = useState(false)
+  // D7: chat vs trajectory-replay view toggle.
+  const [showReplay, setShowReplay] = useState(false)
   // Which agent's drill-down panel is open (null = closed).
   const [drillAgent, setDrillAgent] = useState<string | null>(null)
 
@@ -230,17 +233,34 @@ export function ProjectView() {
         />
       )}
 
-      <Chat
-        sessionId={id}
-        history={project.history}
-        team={project.team}
-        agents={agentArray}
-        interrupt={project.interrupt}
-        plannerLog={project.plannerLog}
-        stallHint={project.stallHint}
-      />
+      <div className="flex items-center gap-1 px-6 pt-2">
+        <button type="button"
+                className={showReplay ? 'btn-ghost text-xs' : 'btn-ghost text-xs bg-surface-2'}
+                onClick={() => setShowReplay(false)}>
+          Chat
+        </button>
+        <button type="button"
+                className={showReplay ? 'btn-ghost text-xs bg-surface-2' : 'btn-ghost text-xs'}
+                onClick={() => setShowReplay(true)}>
+          Replay
+        </button>
+      </div>
 
-      <Composer sessionId={id} disabled={isTerminal} />
+      {showReplay ? (
+        <TrajectoryView sessionId={id} />
+      ) : (
+        <Chat
+          sessionId={id}
+          history={project.history}
+          team={project.team}
+          agents={agentArray}
+          interrupt={project.interrupt}
+          plannerLog={project.plannerLog}
+          stallHint={project.stallHint}
+        />
+      )}
+
+      <Composer sessionId={id} disabled={isTerminal || showReplay} />
 
       <SafetyOverrideModal
         sessionId={id}

@@ -82,3 +82,53 @@ def test_report_write_and_diff(tmp_path) -> None:
 def test_diff_without_previous_is_baseline(tmp_path) -> None:
     lines = diff_reports({"results": []}, None)
     assert "baseline" in lines[0]
+
+
+# ── D7: trajectory endpoint ─────────────────────────────────────────────────
+
+
+def test_trajectory_endpoint_orders_and_types() -> None:
+    import asyncio as _asyncio
+
+    from fastapi.testclient import TestClient
+
+    from backend.main import app
+    from backend.persistence.db import DB_PATH, init_db
+    from backend.persistence.events import create_session, write_event
+    from backend.workers.base import EventType, HiveEvent
+
+    async def seed():
+        await init_db(DB_PATH)
+        await create_session("traj-1")
+        await write_event(HiveEvent(type=EventType.AGENT_START, agent_id="b-0",
+                                    session_id="traj-1", ts=10.0))
+        await write_event(HiveEvent(type=EventType.VALIDATION_FAILED, agent_id="b-0",
+                                    session_id="traj-1", ts=30.0,
+                                    raw_payload={"findings": ["claims x"]}))
+        await write_event(HiveEvent(type=EventType.AGENT_ERROR, agent_id="b-0",
+                                    session_id="traj-1", ts=20.0,
+                                    error="boom", origin="infrastructure"))
+        await write_event(HiveEvent(type=EventType.REVIEW_LLM, agent_id="reviewer",
+                                    session_id="traj-1", ts=40.0,
+                                    raw_payload={"notes": ["fixed it"]}))
+        await write_event(HiveEvent(type=EventType.COMPACTION, agent_id="orchestrator",
+                                    session_id="traj-1", ts=50.0,
+                                    raw_payload={"pruned_turns": 5, "state_doc": "d",
+                                                 "pruned": []}))
+
+    _asyncio.get_event_loop_policy().new_event_loop().run_until_complete(seed())
+
+    with TestClient(app) as client:
+        resp = client.get("/api/sessions/traj-1/trajectory")
+    assert resp.status_code == 200
+    nodes = resp.json()["trajectory"]
+    ts_list = [n["ts"] for n in nodes]
+    assert ts_list == sorted(ts_list)                       # chronological
+    cats = [n["category"] for n in nodes]
+    assert {"lifecycle", "error", "validation", "review", "compaction"} <= set(cats)
+    err = next(n for n in nodes if n["category"] == "error")
+    assert "infrastructure" in err["title"]                 # D0.2 origin visible
+
+    with TestClient(app) as client:
+        resp = client.get("/api/sessions/nope-x/trajectory")
+    assert resp.status_code == 404
