@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections import deque
 from collections.abc import AsyncIterator
 
 from backend.workers.base import EventType, HiveEvent, WorkerConfig
@@ -34,6 +35,7 @@ IDLE_TIMEOUT_MS = int(_os.environ.get("CLAUDE_STREAM_IDLE_TIMEOUT_MS", "600000")
 async def parse_stream(
     stdout: asyncio.StreamReader,
     config: WorkerConfig,
+    raw_tail: "deque[str] | None" = None,
 ) -> AsyncIterator[HiveEvent]:
     """Read raw bytes from claude CLI stdout, yield HiveEvents.
 
@@ -73,6 +75,7 @@ async def parse_stream(
                     f"worker idle-timeout after {IDLE_TIMEOUT_MS / 1000:.0f}s "
                     "— no output from claude CLI"
                 ),
+                origin="infrastructure",  # D0.2: a stall is never the agent's output
             )
             return
         if not chunk:
@@ -110,6 +113,11 @@ async def parse_stream(
             raw_line = raw_line.strip()
             if not raw_line:
                 continue
+
+            # D0.1: remember the last few raw lines so an exit-code failure
+            # with empty stderr can still show WHAT the process last said.
+            if raw_tail is not None:
+                raw_tail.append(raw_line.decode(errors="replace")[:500])
 
             try:
                 payload = json.loads(raw_line)

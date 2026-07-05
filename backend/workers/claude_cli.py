@@ -10,6 +10,7 @@ import asyncio
 import logging
 import os
 import signal
+from collections import deque
 from collections.abc import AsyncIterator
 from typing import ClassVar
 
@@ -117,9 +118,28 @@ class ClaudeCLIWorker:
         pgid = os.getpgid(proc.pid)
         self._processes[config.agent_id] = (proc, pgid)
 
+        # D0.1: drain stderr CONCURRENTLY into a bounded buffer. Reading it
+        # only after exit risks a pipe-full deadlock, and a killed process
+        # loses it entirely; failures must be diagnosable from the event log.
+        stderr_buf = bytearray()
+
+        async def _drain_stderr() -> None:
+            try:
+                while True:
+                    chunk = await proc.stderr.read(1024)  # type: ignore[union-attr]
+                    if not chunk:
+                        return
+                    stderr_buf.extend(chunk)
+                    del stderr_buf[:-2048]  # keep only the last ~2KB
+            except Exception:  # noqa: BLE001
+                return
+
+        stderr_task = asyncio.create_task(_drain_stderr())
+        raw_tail: deque[str] = deque(maxlen=3)
+
         stalled = False
         try:
-            async for event in parse_stream(proc.stdout, config):  # type: ignore[arg-type]
+            async for event in parse_stream(proc.stdout, config, raw_tail=raw_tail):  # type: ignore[arg-type]
                 # Stamp the subprocess PID onto the start event so the
                 # orchestrator can persist it (agents.pid) — recovery uses
                 # it to tell a live agent from a crashed one after restart.
@@ -149,29 +169,33 @@ class ClaudeCLIWorker:
                 return
 
             await proc.wait()
+            try:
+                await asyncio.wait_for(stderr_task, timeout=2.0)
+            except asyncio.TimeoutError:
+                stderr_task.cancel()
             exit_code = proc.returncode
 
             if exit_code != 0:
-                stderr = b""
-                if proc.stderr:
-                    stderr = await proc.stderr.read()
-                # Always include the exit code even when stderr is empty —
-                # an "exit code 1" with no stderr is exactly the failure
-                # mode we hit dogfooding (likely rate-limit / token-expiry).
-                # Surfacing the exit code separately lets the UI distinguish
-                # "claude exited cleanly with an error message" from "claude
-                # crashed without saying anything".
-                stderr_text = stderr.decode(errors="replace").strip()
-                error_msg = (
-                    f"claude exited {exit_code}"
-                    + (f": {stderr_text}" if stderr_text else " (no stderr captured)")
-                )
+                # D0.1: the C5 dogfooding failure mode was 'claude exited 1
+                # (no stderr captured)' repeated with zero diagnosis. Include
+                # the stderr tail; when stderr is genuinely empty, include
+                # the last stdout NDJSON lines instead so the event log
+                # always says what the process last did.
+                stderr_text = bytes(stderr_buf).decode(errors="replace").strip()
+                if stderr_text:
+                    detail = f": stderr tail: {stderr_text[-2048:]}"
+                elif raw_tail:
+                    detail = " (empty stderr; last stdout lines: " + " | ".join(raw_tail) + ")"
+                else:
+                    detail = " (empty stderr, no stdout captured)"
+                error_msg = f"claude exited {exit_code}{detail}"
                 logger.error("claude CLI exited with error | agent=%s: %s", config.agent_id, error_msg)
                 yield HiveEvent(
                     type=EventType.AGENT_ERROR,
                     agent_id=config.agent_id,
                     session_id=config.session_id,
                     error=error_msg,
+                    origin="unknown",  # D0.2: exit codes alone can't assign fault
                 )
             else:
                 yield HiveEvent(
@@ -183,6 +207,8 @@ class ClaudeCLIWorker:
             await self.kill(config.agent_id)
             raise
         finally:
+            if not stderr_task.done():
+                stderr_task.cancel()
             self._processes.pop(config.agent_id, None)
 
     async def kill(self, agent_id: str) -> None:

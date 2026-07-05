@@ -42,11 +42,21 @@ async def record_completion(
     worker_id: str,
     *,
     passed_validation: bool,
+    origin: str = "agent",
     db_path: Path = DB_PATH,
-) -> TrustScore:
-    """Bump the counters for one worker after a completion + return the latest snapshot."""
+) -> TrustScore | None:
+    """Bump the counters for one worker after a completion + return the latest snapshot.
+
+    D0.2: failures with origin != 'agent' (infrastructure faults, unknowns)
+    do NOT touch the counters — Phase C's integration bugs charged workers
+    for HIVE's own mistakes. Such completions are recorded in the event log
+    only; this returns the current snapshot (or None) without writing.
+    """
     if not worker_id:
         raise ValueError("worker_id is required")
+
+    if not passed_validation and origin != "agent":
+        return await get_trust_score(worker_id, db_path=db_path)
 
     async with get_conn(db_path) as conn:
         # Upsert pattern using INSERT ... ON CONFLICT.

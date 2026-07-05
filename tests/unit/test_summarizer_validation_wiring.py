@@ -54,7 +54,7 @@ async def test_hallucinated_file_claim_fails_validation_and_trust() -> None:
     trust score records the FAILURE even though the process exited clean."""
     trust_calls: list[tuple[str, bool]] = []
 
-    async def fake_trust(worker_id, passed_validation):
+    async def fake_trust(worker_id, passed_validation, origin="agent"):
         trust_calls.append((worker_id, passed_validation))
 
     with patch("backend.orchestrator.graph.ClaudeCLIWorker", _FakeWorker), \
@@ -85,7 +85,7 @@ async def test_validated_claim_passes(tmp_path) -> None:
 
     trust_calls: list[bool] = []
 
-    async def fake_trust(worker_id, passed_validation):
+    async def fake_trust(worker_id, passed_validation, origin="agent"):
         trust_calls.append(passed_validation)
 
     (tmp_path / "auth.ts").write_text("export const login = () => {}\n")

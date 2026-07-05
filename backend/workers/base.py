@@ -64,6 +64,10 @@ class HiveEvent(BaseModel):
     # EventType.AGENT_ERROR / RATE_LIMIT
     error: str | None = None
     retry_after_ms: int | None = None
+    # D0.2: failure origin — 'agent' (worker output at fault),
+    # 'infrastructure' (spawn/MCP/HIVE/rate-limit fault), or 'unknown'.
+    # Trust scores only count origin='agent' failures.
+    origin: str | None = None
 
     # EventType.AGENT_START — OS process id of the spawned worker, when the
     # backend runs one (Claude CLI subprocess). Persisted to agents.pid so

@@ -838,6 +838,7 @@ async def _execute_worker(
         return AgentResult(
             agent_id=agent.agent_id, status="failed", text_output="",
             input_tokens=0, output_tokens=0, cost_usd=0.0, error=msg,
+            failure_origin="infrastructure",
         )
 
     # Skill retrieval keys off the agent's own brief — the subtask is a far
@@ -867,14 +868,24 @@ async def _execute_worker(
             spec = get_spec(sid)
             if spec is None:
                 missing.append(f"unknown MCP server {sid!r}")
-            else:
-                missing.extend(f"{sid}: {m}" for m in preflight(spec))
+                continue
+            missing.extend(f"{sid}: {m}" for m in preflight(spec))
+            if not missing:
+                # D0.3: prove the server actually starts (initialize
+                # handshake) before an agent run pays for it. Cached per
+                # args-hash, so only the session's first spawn waits.
+                from backend.mcp.doctor import check_server
+                ok, detail = await check_server(
+                    spec, agent_id=agent.agent_id, worktree=agent.worktree_path,
+                )
+                if not ok:
+                    missing.append(f"{sid}: server failed doctor check — {detail}")
         if missing:
             msg = "MCP preflight failed — " + "; ".join(missing)
             logger.error("%s (agent=%s)", msg, agent.agent_id)
             error_event = HiveEvent(
                 type=EventType.AGENT_ERROR, agent_id=agent.agent_id,
-                session_id=session_id, error=msg,
+                session_id=session_id, error=msg, origin="infrastructure",
             )
             try:
                 await write_event(error_event)
@@ -891,6 +902,7 @@ async def _execute_worker(
             return AgentResult(
                 agent_id=agent.agent_id, status="failed", text_output="",
                 input_tokens=0, output_tokens=0, cost_usd=0.0, error=msg,
+                failure_origin="infrastructure",
             )
 
         cfg = render_mcp_config(agent.mcp_servers, agent.agent_id, agent.worktree_path)
@@ -1006,10 +1018,12 @@ async def _execute_worker(
             elif event.type == EventType.AGENT_ERROR:
                 result["status"] = "failed"
                 result["error"] = event.error
+                result["failure_origin"] = event.origin or "unknown"
     except Exception as exc:
         logger.exception("Worker %s crashed", agent.agent_id)
         result["status"] = "failed"
         result["error"] = str(exc)
+        result["failure_origin"] = "infrastructure"  # HIVE's own code raised
 
     result["text_output"] = final_text if final_text is not None else "".join(text_parts)
     await _auto_commit_worktree(agent.worktree_path, agent.agent_id)
@@ -1093,10 +1107,18 @@ async def _execute_worker(
     # Section 5.5 — trust score per worker model. "Passed" now requires the
     # validators to agree, not just a clean exit; an unvalidated completion
     # (no structured report available) counts as passed to avoid punishing
-    # chat-only roles that produce no file claims.
+    # chat-only roles that produce no file claims. D0.2: failures are only
+    # charged to the worker when the fault is the agent's own output —
+    # validation failures are origin='agent'; stream/HIVE failures carry
+    # whatever origin the failure path assigned.
     passed = final_status == "completed" and result["validation_passed"] is not False
+    if result.get("validation_passed") is False:
+        result["failure_origin"] = "agent"
+    origin = result.get("failure_origin") or ("agent" if passed else "unknown")
     try:
-        await record_trust_completion(breaker.worker_id, passed_validation=passed)
+        await record_trust_completion(
+            breaker.worker_id, passed_validation=passed, origin=origin,
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Trust record failed for %s: %s", breaker.worker_id, exc)
 

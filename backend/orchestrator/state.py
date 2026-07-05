@@ -28,6 +28,9 @@ class AgentResult(TypedDict):
     # (agent failed before validation, or the collector couldn't run).
     validation_passed: NotRequired[bool | None]
     validation_findings: NotRequired[list[str]]
+    # D0.2: who is at fault when status='failed' —
+    # 'agent' | 'infrastructure' | 'unknown'.
+    failure_origin: NotRequired[str | None]
 
 
 class GraphState(TypedDict):

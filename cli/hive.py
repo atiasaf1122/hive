@@ -70,6 +70,32 @@ def status() -> None:
 
 
 @app.command()
+def doctor() -> None:
+    """Live-check every MCP catalog server: spawn + initialize handshake (D0.3)."""
+
+    async def _run() -> int:
+        from backend.mcp.catalog import list_specs, preflight
+        from backend.mcp.doctor import check_server
+
+        failures = 0
+        for spec in list_specs():
+            static_missing = preflight(spec)
+            if static_missing:
+                typer.echo(f"✗ {spec.id:<12} {'; '.join(static_missing)}")
+                failures += 1
+                continue
+            ok, detail = await check_server(spec, use_cache=False)
+            mark = "✓" if ok else "✗"
+            typer.echo(f"{mark} {spec.id:<12} {detail}")
+            failures += 0 if ok else 1
+        return failures
+
+    fails = asyncio.run(_run())
+    if fails:
+        raise typer.Exit(code=1)
+
+
+@app.command()
 def onboard() -> None:
     """First-run setup wizard — sanity-checks the environment for HIVE."""
     from backend.onboarding import render_report, run_onboarding
