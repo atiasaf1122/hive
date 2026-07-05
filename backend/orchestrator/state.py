@@ -58,6 +58,9 @@ class GraphState(TypedDict):
 
     # Orchestrator-first multi-turn conversation
     conversation_history: list[dict]     # [{role, content, ts}]
+    # D3: compaction — compact CURRENT STATE doc replacing pruned turns.
+    state_doc: str
+    turns_since_compaction: int
     pending_message: str                 # the message being processed this turn
     last_response: str                   # most recent orchestrator reply
     user_closed: bool                    # set True by wait_for_user when user closes

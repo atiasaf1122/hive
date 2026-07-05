@@ -19,6 +19,7 @@ class EventType(StrEnum):
     VALIDATION_FAILED = "validation/failed"
     REVIEW_LLM = "review/llm"
     LESSON_DISCARDED = "lesson/discarded"
+    COMPACTION = "compaction/state"
 
     # Content
     TEXT_DELTA = "text/delta"

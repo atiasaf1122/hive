@@ -164,6 +164,7 @@ async def orchestrate(
     history: list[dict] | None = None,
     model: str = PLANNER_MODEL,
     project_path: str | None = None,
+    state_doc: str = "",
 ) -> OrchestratorDecision:
     """Run one orchestrator turn — answer the user, optionally with a team to spawn.
 
@@ -177,7 +178,7 @@ async def orchestrate(
     Falls back to /tmp if the path is missing/inaccessible (e.g. tests).
     """
     worker = ClaudeCLIWorker()
-    prompt = _build_prompt(message, history or [])
+    prompt = _build_prompt(message, history or [], state_doc=state_doc)
 
     cwd = "/tmp"
     if project_path:
@@ -253,8 +254,14 @@ async def orchestrate(
     return _parse_decision(final_text if final_text is not None else "".join(chunks))
 
 
-def _build_prompt(message: str, history: list[dict]) -> str:
+def _build_prompt(message: str, history: list[dict], state_doc: str = "") -> str:
     parts = [_INSTRUCTIONS, ""]
+    if state_doc:
+        # D3: the compact CURRENT STATE doc replaces the turns that were
+        # pruned by compaction — it comes BEFORE the remaining raw turns.
+        parts.append("Current project state (compacted from earlier turns):")
+        parts.append(state_doc)
+        parts.append("")
     if history:
         parts.append("Conversation so far:")
         for entry in history[-10:]:  # last 10 turns

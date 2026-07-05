@@ -101,11 +101,48 @@ async def orchestrator_node(state: GraphState) -> dict:
         "message": message,
     })
 
+    # D3: compaction — when the history grows past the threshold (or every
+    # N turns), collapse older turns into a CURRENT STATE doc. Pruned turns
+    # are persisted in the compaction event; nothing is lost.
+    state_doc = state.get("state_doc") or ""
+    turns_since = int(state.get("turns_since_compaction") or 0) + 1
+    from backend.orchestrator.compaction import (
+        KEEP_LAST_TURNS,
+        build_state_doc,
+        should_compact,
+    )
+    if len(history) > KEEP_LAST_TURNS and should_compact(history, turns_since):
+        pruned = history[:-KEEP_LAST_TURNS]
+        new_doc = await build_state_doc(
+            history, state_doc, state["task"], session_id=state["session_id"])
+        if new_doc:
+            try:
+                await write_event(HiveEvent(
+                    type=EventType.COMPACTION,
+                    agent_id="orchestrator", session_id=state["session_id"],
+                    raw_payload={"state_doc": new_doc,
+                                 "pruned_turns": len(pruned),
+                                 "pruned": pruned},
+                ))
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Event write failed: %s", exc)
+            await _emit_to_ws(state["session_id"], {
+                "type": "context_compacted",
+                "session_id": state["session_id"],
+                "pruned_turns": len(pruned),
+            })
+            history = history[-KEEP_LAST_TURNS:]
+            state_doc = new_doc
+            turns_since = 0
+            logger.info("Compacted %d turns into state doc for %s",
+                        len(pruned), state["session_id"])
+
     decision = await orchestrate(
         message=message,
         session_id=state["session_id"],
         history=history[:-1],  # don't include the current message twice
         project_path=state.get("project_path") or state.get("worktree_path"),
+        state_doc=state_doc,
     )
 
     composition_dict = _composition_to_dict(decision.composition)
@@ -152,6 +189,8 @@ async def orchestrator_node(state: GraphState) -> dict:
         "team_composition": composition_dict,
         "last_response": decision.response,
         "conversation_history": history,
+        "state_doc": state_doc,
+        "turns_since_compaction": turns_since,
     }
 
 
@@ -686,6 +725,8 @@ async def run_session(
             "approval_mode": approval_mode,
             "approval_rejected": False,
             "conversation_history": [],
+            "state_doc": "",
+            "turns_since_compaction": 0,
             "pending_message": task,
             "last_response": "",
             "user_closed": False,
