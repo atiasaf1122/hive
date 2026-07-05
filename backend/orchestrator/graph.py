@@ -306,14 +306,11 @@ async def run_workers_node(state: GraphState) -> dict:
     """Run all active agents in parallel (up to MAX_CONCURRENT at a time)."""
     plan_dict = state.get("spawn_plan") or {}
     active = [_dict_to_agent(a) for a in plan_dict.get("active_agents", [])]
-
     if not active:
-        active = [SpawnedAgent(
-            agent_id=state["agent_id"],
-            role="worker",
-            model=state["model"],
-            worktree_path=state.get("worktree_path", os.getcwd()),
-        )]
+        # Can't happen through the normal spawn path (the planner auto-floors
+        # a Builder), but guard against a malformed checkpoint.
+        logger.warning("run_workers reached with no active agents — skipping")
+        return {"worker_results": {}}
 
     pending = state.get("pending_message") or state["task"]
     session_id = state["session_id"]

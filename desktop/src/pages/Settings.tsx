@@ -28,7 +28,6 @@ import {
   type SettingsTab,
 } from '../components/settings/SettingsLayout'
 import { SafetyPanel } from '../components/settings/SafetyPanel'
-import { SecurityPanel } from '../components/settings/SecurityPanel'
 
 /** `costly` worker picks trigger a confirm() prompt — HIVE invariant #7
  *  reserves Opus for Orchestrator + Reviewer, but power users may still
@@ -57,7 +56,6 @@ export function Settings() {
       {tab === 'appearance' && <AppearancePanel />}
       {tab === 'ai' && <AIPanel />}
       {tab === 'routing' && <RoutingPanel />}
-      {tab === 'security' && <SecurityPanel />}
       {tab === 'safety' && <SafetyPanel />}
       {tab === 'integrations' && <IntegrationsPanel />}
       {tab === 'advanced' && <AdvancedPanel />}
@@ -431,7 +429,6 @@ function IntegrationsPanel() {
 /* ── Advanced ────────────────────────────────────────────────────────────── */
 
 function AdvancedPanel() {
-  const s = useSettings()
   const reset = useSettings((s) => s.reset)
 
   const dataFlow = useMemo(
@@ -440,9 +437,8 @@ function AdvancedPanel() {
       { label: 'Agent prompts', target: 'Claude / Ollama', detail: 'one of the configured backends per agent' },
       { label: 'Worktree files', target: 'Local git', detail: '~/.hive/worktrees/<session>' },
       { label: 'Skills (downloaded)', target: 'Local files', detail: '~/.hive/skills/<name>/SKILL.md' },
-      { label: 'Telemetry', target: s.telemetry ? 'Anonymous crash reports' : 'Off', detail: 'opt-in only' },
     ],
-    [s.telemetry],
+    [],
   )
 
   return (
@@ -462,47 +458,6 @@ function AdvancedPanel() {
             ))}
           </tbody>
         </table>
-      </SettingCard>
-
-      <SettingCard
-        title="Privacy"
-        description="Telemetry is OFF by default and applies only to crash reports."
-      >
-        <SettingRow
-          label="Anonymous crash reports"
-          hint={
-            "On crashes only — we'd receive: error message, stack trace, " +
-            "HIVE version, OS name + version. No project content, no " +
-            "credentials, no personal data. Phase 9D wires the actual sink."
-          }
-        >
-          <Toggle
-            checked={s.telemetry}
-            onChange={(v) => s.update({ telemetry: v })}
-          />
-        </SettingRow>
-        <SettingRow
-          label="View what we'd collect"
-          hint="An example of the exact JSON payload sent when telemetry is on."
-        >
-          <button
-            type="button"
-            onClick={() => alert(SAMPLE_CRASH_REPORT)}
-            className="btn-ghost text-xs"
-          >
-            Show sample
-          </button>
-        </SettingRow>
-        <SettingRow label="Export all my data" hint="Phase 9D feature — writes a tar.gz to your projects dir.">
-          <button type="button" className="btn-ghost text-xs" disabled>
-            Coming in 9D
-          </button>
-        </SettingRow>
-        <SettingRow label="Delete all my data" hint="Wipes ~/.hive/. Cannot be undone.">
-          <button type="button" className="btn-ghost text-xs text-red-500" disabled>
-            Coming in 9D
-          </button>
-        </SettingRow>
       </SettingCard>
 
       <SettingCard
@@ -551,34 +506,6 @@ function AdvancedPanel() {
     </>
   )
 }
-
-const SAMPLE_CRASH_REPORT = JSON.stringify(
-  {
-    type: 'crash',
-    ts: '2026-05-19T14:30:00Z',
-    app: { name: 'hive-desktop', version: '0.9.0' },
-    os: { name: 'Windows', version: '11.0.22631' },
-    error: {
-      type: 'TypeError',
-      message: "Cannot read property 'agents' of undefined",
-      stack: [
-        'at SessionView (/.../SessionView.tsx:42:12)',
-        'at renderRoot (/.../react-dom.js:8120:14)',
-      ],
-    },
-    // The fields explicitly NOT sent:
-    not_sent: [
-      'project content / file contents',
-      'chat messages',
-      'OAuth tokens or API keys',
-      'IP address',
-      'username',
-      'workspace paths',
-    ],
-  },
-  null,
-  2,
-)
 
 function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
   return (

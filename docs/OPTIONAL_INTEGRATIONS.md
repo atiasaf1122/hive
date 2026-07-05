@@ -38,35 +38,9 @@ next backend restart picks up the change.
 
 If the token is invalid, the affected fetchers fall back to the
 offline curated lists with `fallback: true` — the UI shows the
-"showing offline cache" banner. Open `Settings → Security` → audit
-viewer? Not the right place. Look at the backend stderr or hit
+"showing offline cache" banner. Look at the backend stderr or hit
 `GET /api/registries/diagnose` from the browser — that returns the
 exact per-source error string.
-
-## Crash reporting (off by default)
-
-`Settings → Advanced → Anonymous crash reports` is OFF by default.
-The toggle controls whether HIVE phones home on a stack-trace.
-
-When enabled, HIVE collects only:
-
-- the Python exception type + message + traceback
-- the HIVE app version
-- the host OS name + version
-
-That payload is sent to whatever **`HIVE_TELEMETRY_DSN`** points at.
-The current build ships **without a default DSN** — set the env var to
-a Sentry/GlitchTip-style endpoint of your choice and the toggle takes
-effect. The plumbing already wraps the orchestrator runner; only the
-HTTP POST to a remote ingest needs your DSN.
-
-The intent is that you point this at your own self-hosted GlitchTip
-(or your team's Sentry tenant). HIVE deliberately ships without a
-default endpoint so we can't accidentally start receiving telemetry
-nobody opted in to.
-
-To disable it again after enabling, flip the toggle off — the env var
-is consulted lazily per-event.
 
 ## Telegram bot (already documented elsewhere)
 

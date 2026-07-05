@@ -23,17 +23,6 @@ class AgentResult(TypedDict):
     error: str | None
 
 
-class WorkerInput(TypedDict):
-    """Input fed to each individual worker node via LangGraph Send."""
-    session_id: str
-    task: str
-    agent_id: str
-    role: str
-    model: str
-    worktree_path: str
-    max_turns: int
-
-
 class GraphState(TypedDict):
     # Session identity
     session_id: str

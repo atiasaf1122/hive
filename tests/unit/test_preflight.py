@@ -86,7 +86,7 @@ def test_registry_diagnose_endpoint_shape(client) -> None:
     skills_sources = {s["name"] for s in body["skills"]["sources"]}
     assert skills_sources == {"clawhub", "cookbook", "community"}
     mcp_sources = {s["name"] for s in body["mcp"]["sources"]}
-    assert mcp_sources == {"official", "smithery", "awesome"}
+    assert mcp_sources == {"official", "smithery"}
     # Each source row has the diagnostic fields we depend on in the UI
     for row in body["skills"]["sources"]:
         for field in ("ok", "error", "items_returned", "duration_ms", "last_success_at"):

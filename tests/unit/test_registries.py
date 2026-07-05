@@ -167,11 +167,10 @@ async def test_mcp_falls_back_when_all_fetchers_fail(monkeypatch: pytest.MonkeyP
     async def _boom(): raise RuntimeError("offline")
     monkeypatch.setattr(mcp, "_fetch_official", _boom)
     monkeypatch.setattr(mcp, "_fetch_smithery", _boom)
-    monkeypatch.setattr(mcp, "_fetch_awesome", _boom)
 
     res = await mcp.list_mcp_servers(source="all")
     assert res["fallback"] is True
-    assert res["sources_failed"] == ["official", "smithery", "awesome"]
+    assert res["sources_failed"] == ["official", "smithery"]
     assert len(res["items"]) > 0
     # Categories list populated from items
     assert isinstance(res["categories"], list)
@@ -182,7 +181,6 @@ async def test_mcp_category_filter(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _empty(): return []
     monkeypatch.setattr(mcp, "_fetch_official", _empty)
     monkeypatch.setattr(mcp, "_fetch_smithery", _empty)
-    monkeypatch.setattr(mcp, "_fetch_awesome", _empty)
 
     res = await mcp.list_mcp_servers(source="all", category="web search")
     assert all(i["category"] == "web search" for i in res["items"])
@@ -194,7 +192,6 @@ async def test_mcp_query_filter(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _empty(): return []
     monkeypatch.setattr(mcp, "_fetch_official", _empty)
     monkeypatch.setattr(mcp, "_fetch_smithery", _empty)
-    monkeypatch.setattr(mcp, "_fetch_awesome", _empty)
 
     res = await mcp.list_mcp_servers(query="postgres", source="all")
     names = " ".join(i["name"].lower() for i in res["items"])

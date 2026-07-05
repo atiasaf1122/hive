@@ -26,7 +26,6 @@ class SafetyOverride:
     max_session_duration_hours: float | None = None
     max_concurrent_agents: int | None = None
     max_same_file_edits: int | None = None
-    notify_at_burn_ratio: float | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -34,7 +33,6 @@ class SafetyOverride:
             "max_session_duration_hours": self.max_session_duration_hours,
             "max_concurrent_agents": self.max_concurrent_agents,
             "max_same_file_edits": self.max_same_file_edits,
-            "notify_at_burn_ratio": self.notify_at_burn_ratio,
         }
 
 
@@ -70,7 +68,6 @@ async def load_override(
         max_session_duration_hours=row["max_session_duration_hours"],
         max_concurrent_agents=row["max_concurrent_agents"],
         max_same_file_edits=row["max_same_file_edits"],
-        notify_at_burn_ratio=row["notify_at_burn_ratio"],
     )
 
 
@@ -86,15 +83,14 @@ async def save_override(
             INSERT INTO session_safety_overrides (
                 session_id,
                 max_tokens_per_autonomous_run, max_session_duration_hours,
-                max_concurrent_agents, max_same_file_edits, notify_at_burn_ratio,
+                max_concurrent_agents, max_same_file_edits,
                 updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+            ) VALUES (?, ?, ?, ?, ?, datetime('now'))
             ON CONFLICT(session_id) DO UPDATE SET
                 max_tokens_per_autonomous_run = excluded.max_tokens_per_autonomous_run,
                 max_session_duration_hours    = excluded.max_session_duration_hours,
                 max_concurrent_agents         = excluded.max_concurrent_agents,
                 max_same_file_edits           = excluded.max_same_file_edits,
-                notify_at_burn_ratio          = excluded.notify_at_burn_ratio,
                 updated_at                    = datetime('now')
             """,
             (
@@ -103,7 +99,6 @@ async def save_override(
                 override.max_session_duration_hours,
                 override.max_concurrent_agents,
                 override.max_same_file_edits,
-                override.notify_at_burn_ratio,
             ),
         )
         await conn.commit()

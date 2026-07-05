@@ -18,7 +18,6 @@ from pathlib import Path
 from fastapi import APIRouter
 
 from backend.persistence.db import DB_PATH, get_conn
-from backend.telegram.bot import get_bot
 
 router = APIRouter(prefix="/api/lifecycle")
 
@@ -50,8 +49,9 @@ async def active_counts() -> dict:
     return {
         "interactive_agents": interactive,
         "enabled_automations": automations,
-        "telegram_bot_running": get_bot() is not None,
+        # Telegram is parked (Phase A) — the bot never runs with the backend.
+        "telegram_bot_running": False,
         # Convenience flags so the UI doesn't recompute the same logic.
         "has_interactive_work": interactive > 0,
-        "should_keep_background": automations > 0 or get_bot() is not None,
+        "should_keep_background": automations > 0,
     }

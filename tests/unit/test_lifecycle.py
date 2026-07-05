@@ -59,8 +59,7 @@ async def test_enabled_automation_count(db) -> None:
 
 def test_active_counts_endpoint_shape() -> None:
     with TestClient(app) as client:
-        with patch("backend.api.lifecycle_http.get_bot", return_value=None):
-            resp = client.get("/api/lifecycle/active-counts")
+        resp = client.get("/api/lifecycle/active-counts")
     assert resp.status_code == 200
     body = resp.json()
     for key in (
@@ -74,11 +73,10 @@ def test_active_counts_endpoint_shape() -> None:
     assert body["telegram_bot_running"] is False
 
 
-def test_should_keep_background_when_bot_running() -> None:
-    fake_bot = object()
+def test_telegram_reported_parked() -> None:
+    """Telegram is parked (Phase A): the bot never runs with the backend,
+    so lifecycle must always report it not-running."""
     with TestClient(app) as client:
-        with patch("backend.api.lifecycle_http.get_bot", return_value=fake_bot):
-            resp = client.get("/api/lifecycle/active-counts")
+        resp = client.get("/api/lifecycle/active-counts")
     body = resp.json()
-    assert body["telegram_bot_running"] is True
-    assert body["should_keep_background"] is True
+    assert body["telegram_bot_running"] is False

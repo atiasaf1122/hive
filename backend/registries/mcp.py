@@ -3,7 +3,6 @@
 Sources:
   - Official MCP Registry        https://registry.modelcontextprotocol.io
   - Smithery                     https://smithery.ai/api/servers
-  - Awesome MCP (GitHub README)  github.com/punkpeye/awesome-mcp-servers
 
 Same pattern as `skills.py`: each fetcher returns a `FetchResult` carrying
 the real error string. On failure we transparently fall through to the
@@ -65,7 +64,6 @@ async def list_mcp_servers(
     fetchers = {
         "official": _fetch_official,
         "smithery": _fetch_smithery,
-        "awesome": _fetch_awesome,
     }
     if source != "all":
         fetchers = {source: fetchers[source]} if source in fetchers else {}
@@ -127,7 +125,6 @@ async def diagnose() -> dict:
     fetchers = {
         "official": _fetch_official,
         "smithery": _fetch_smithery,
-        "awesome": _fetch_awesome,
     }
     results: list[FetchResult] = await asyncio.gather(
         *[_run_fetcher(name, fn) for name, fn in fetchers.items()]
@@ -228,18 +225,6 @@ async def _fetch_smithery() -> list[dict]:
             "installs": r.get("installs"),
         })
     return items
-
-
-async def _fetch_awesome() -> list[dict]:
-    """awesome-mcp-servers is a hand-maintained README. Parsing it live is
-    fragile (the format drifts), so we just touch the README to confirm
-    reachability for diagnostics, and rely on the curated mirror in
-    `curated.py` for content."""
-    url = "https://raw.githubusercontent.com/punkpeye/awesome-mcp-servers/main/README.md"
-    async with httpx.AsyncClient(timeout=5.0, headers=_gh_headers()) as client:
-        resp = await client.head(url)
-        resp.raise_for_status()
-    return []
 
 
 def _filter_curated(source: str) -> list[dict]:

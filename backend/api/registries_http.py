@@ -3,7 +3,7 @@
 Endpoints (all cached server-side for 1 h):
 
     GET /api/registries/skills/search?q=&source=all|clawhub|cookbook|community
-    GET /api/registries/mcp/list?q=&source=all|official|smithery|awesome&category=
+    GET /api/registries/mcp/list?q=&source=all|official|smithery&category=
 
 Both return a uniform envelope:
     {items, fallback, sources_tried, sources_failed, cached_at_age_seconds, ...}

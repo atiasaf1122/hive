@@ -11,7 +11,6 @@ import {
   IconBrandTelegram,
   IconCode,
   IconPalette,
-  IconShieldLock,
   IconShieldCheck,
   IconUserCircle,
 } from '@tabler/icons-react'
@@ -23,7 +22,6 @@ export type SettingsTab =
   | 'appearance'
   | 'ai'
   | 'routing'
-  | 'security'
   | 'safety'
   | 'integrations'
   | 'advanced'
@@ -51,8 +49,7 @@ const NAV: NavGroup[] = [
   {
     group: 'Safety',
     items: [
-      { id: 'security', label: 'Command sandbox', icon: IconShieldLock },
-      { id: 'safety',   label: 'Limits & breakers', icon: IconShieldCheck },
+      { id: 'safety', label: 'Limits & breakers', icon: IconShieldCheck },
     ],
   },
   {

@@ -20,7 +20,6 @@ interface OverridePayload {
   max_session_duration_hours: number | null
   max_concurrent_agents: number | null
   max_same_file_edits: number | null
-  notify_at_burn_ratio: number | null
 }
 
 interface EffectivePayload {

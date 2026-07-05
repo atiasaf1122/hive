@@ -23,7 +23,6 @@ from backend.safety.pattern_detector import (
     ReviewerRejection,
     detect_stuck_patterns,
 )
-from backend.safety.quality_monitor import QualityMonitor
 
 
 # ── Hard stops ──────────────────────────────────────────────────────────────
@@ -172,54 +171,6 @@ def test_registry_reset_zeroes_a_breaker() -> None:
     reg.reset("worker-x")
     assert cb.state is BreakerState.CLOSED
     assert cb.consecutive_failures == 0
-
-
-# ── Quality monitor ─────────────────────────────────────────────────────────
-
-def test_quality_monitor_quiet_until_window_full() -> None:
-    qm = QualityMonitor(window_size=5)
-    for s in [0.9, 0.8, 0.7]:
-        assert qm.record_score("s1", s) is None
-
-
-def test_quality_monitor_alerts_on_sharp_drop() -> None:
-    qm = QualityMonitor(window_size=5, drop_threshold=0.15, floor=0.5)
-    # Healthy run.
-    for s in [0.9, 0.9, 0.95, 0.85, 0.9]:
-        qm.record_score("s1", s)
-    # Then quality collapses.
-    rec = None
-    for s in [0.4, 0.3, 0.4, 0.3, 0.45]:
-        rec = qm.record_score("s1", s)
-    assert rec is not None
-    assert rec.recent_average < rec.historical_average
-    assert rec.delta >= 0.15
-
-
-def test_quality_monitor_no_alert_when_floor_clears() -> None:
-    """A drop from great to merely OK shouldn't trigger an upgrade."""
-    qm = QualityMonitor(window_size=5, drop_threshold=0.15, floor=0.5)
-    for s in [0.95] * 5:
-        qm.record_score("s2", s)
-    rec = None
-    for s in [0.7, 0.7, 0.7, 0.7, 0.7]:
-        rec = qm.record_score("s2", s)
-    assert rec is None  # recent_avg=0.7 ≥ floor
-
-
-def test_quality_monitor_rejects_out_of_range() -> None:
-    qm = QualityMonitor()
-    with pytest.raises(ValueError):
-        qm.record_score("s", 1.5)
-    with pytest.raises(ValueError):
-        qm.record_score("s", -0.1)
-
-
-def test_quality_monitor_reset() -> None:
-    qm = QualityMonitor()
-    qm.record_score("s", 0.9)
-    qm.reset("s")
-    assert qm.session_scores.get("s") is None
 
 
 # ── Pattern detector ────────────────────────────────────────────────────────

@@ -65,37 +65,6 @@ async def notify_approval(
     return delivered
 
 
-async def notify_session_end(session_id: str, summary: str, cost_usd: float) -> int:
-    """Notify when a session closes/completes."""
-    bot = get_bot()
-    if bot is None:
-        return 0
-
-    cfg = load_config()
-    if not cfg.notify_session_end or _in_quiet_hours(cfg):
-        return 0
-
-    chats = _resolve_target_chats(session_id, cfg)
-    if not chats:
-        return 0
-
-    body = summary.strip()[:1500] if summary else "(no output)"
-    text = (
-        f"*Session closed:* `{session_id}`\n"
-        f"Cost: ${cost_usd:.4f}\n\n"
-        f"{body}"
-    )
-
-    delivered = 0
-    for chat_id in chats:
-        try:
-            await bot.send_message(chat_id, text, parse_mode="Markdown")
-            delivered += 1
-        except Exception as exc:
-            logger.warning("Failed to notify chat %s: %s", chat_id, exc)
-    return delivered
-
-
 def _resolve_target_chats(session_id: str, cfg) -> list[int]:
     """Subscribers first, otherwise broadcast to every allowed chat."""
     subs = get_subscribers(session_id)

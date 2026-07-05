@@ -214,11 +214,8 @@ async def _session_runner(
                     "correlation_id": correlation_id,
                     "payload": payload,
                 })
-                try:
-                    from backend.telegram.notifier import notify_approval
-                    await notify_approval(session_id, payload, correlation_id=correlation_id)
-                except Exception as exc:
-                    logger.debug("Telegram approval notify skipped: %s", exc)
+                # Telegram approval push removed here — the bot is parked
+                # (Phase A). Restore from git history if re-enabled.
                 loop = asyncio.get_event_loop()
                 future: asyncio.Future = loop.create_future()
                 _register_approval(correlation_id, session_id, future)

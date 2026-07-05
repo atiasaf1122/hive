@@ -16,7 +16,6 @@ from backend.api.lifecycle_http import router as lifecycle_router
 from backend.api.pipelines_http import router as pipelines_router
 from backend.api.preflight_http import router as preflight_router
 from backend.api.safety_http import router as safety_router
-from backend.api.security_http import router as security_router
 from backend.api.registries_http import router as registries_router
 from backend.api.skills_search_http import router as skills_search_router
 from backend.api.summarizer_http import router as summarizer_router
@@ -26,7 +25,11 @@ from backend.api.ws import router as ws_router
 from backend.persistence.db import DB_PATH, init_db
 from backend.persistence.recovery import run_startup_recovery
 from backend.pipelines.scheduler import start_scheduler, stop_scheduler
-from backend.telegram.bot import start_bot, stop_bot
+
+# Telegram is PARKED (Phase A): the code stays in backend/telegram/ but the
+# bot is no longer started with the backend and nothing in the live path
+# imports it. Re-enable by restoring the start_bot()/stop_bot() lifespan
+# calls (git history: Phase 7).
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,10 +47,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.warning("Startup recovery cleaned up %d crashed agent(s)", len(crashed))
 
     await start_scheduler(DB_PATH)
-    await start_bot()
     logger.info("HIVE backend ready — http://localhost:8765")
     yield
-    await stop_bot()
     stop_scheduler()
 
 
@@ -60,7 +61,6 @@ app = FastAPI(
 
 # CORS — registered before routers so it wraps every handler.
 # Origins listed:
-#   :5173            old web frontend (Phase 5) — kept for back-compat
 #   :1420            Tauri dev server (Vite, Phase 9A+)
 #   tauri://localhost
 #   https://tauri.localhost   the two schemes the Tauri WebView uses once
@@ -68,8 +68,6 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
         "http://localhost:1420",
         "http://127.0.0.1:1420",
         "tauri://localhost",
@@ -89,7 +87,6 @@ app.include_router(usage_router)
 app.include_router(detection_router)
 app.include_router(lifecycle_router)
 app.include_router(preflight_router)
-app.include_router(security_router)
 app.include_router(safety_router)
 app.include_router(validation_router)
 app.include_router(install_router)

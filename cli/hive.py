@@ -669,7 +669,7 @@ def start(
 ) -> None:
     """Start the HIVE backend API server (http://localhost:8765).
 
-    In a second terminal, run: cd frontend && npm run dev
+    The desktop app: cd desktop && npm run tauri:dev
     """
     try:
         import uvicorn
@@ -678,7 +678,7 @@ def start(
         raise typer.Exit(code=1)
 
     typer.echo(f"HIVE backend starting on http://{host}:{port}")
-    typer.echo("Frontend dev server: cd frontend && npm run dev")
+    typer.echo("Desktop app: cd desktop && npm run tauri:dev")
     uvicorn.run(
         "backend.main:app",
         host=host,

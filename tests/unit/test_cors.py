@@ -16,8 +16,6 @@ from backend.main import app
 
 REQUIRED_ORIGINS = [
     # Old web frontend (Phase 5)
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
     # Tauri Vite dev server (Phase 9A+)
     "http://localhost:1420",
     "http://127.0.0.1:1420",

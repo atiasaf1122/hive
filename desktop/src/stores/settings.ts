@@ -39,16 +39,6 @@ export interface AppSettings {
   /** Notify on rate-limit / quota thresholds — thresholds only, never blocks. */
   notifyAtClaudeBurn: number  // ratio (1.0 = at-average, 2.0 = twice average)
   notifyAtExternalMonthly: number  // dollars
-  /** Opt-in anonymous crash reports. Default OFF. */
-  telemetry: boolean
-  /**
-   * Shell-command approval mode for the sandbox (Phase 10 / Section 1).
-   * Distinct from `approvalMode` (which gates task/team approval). One of:
-   * 'manual' | 'smart_auto' | 'full_auto' | 'blind_auto' | 'custom_auto'.
-   */
-  commandApprovalMode: 'manual' | 'smart_auto' | 'full_auto' | 'blind_auto' | 'custom_auto'
-  /** Audit-log retention window in days. Defaults to 30. */
-  auditRetentionDays: number
   /**
    * Keep enabled automations + Telegram bot running after the window is closed.
    * On true: backend stays alive in the system tray; closing the window only
@@ -74,10 +64,7 @@ const DEFAULTS: AppSettings = {
   ollamaEndpoint: 'http://localhost:11434',
   notifyAtClaudeBurn: 2.0,
   notifyAtExternalMonthly: 20,
-  telemetry: false,
   backgroundAutomations: true,
-  commandApprovalMode: 'smart_auto',
-  auditRetentionDays: 30,
 }
 
 function load(): AppSettings {

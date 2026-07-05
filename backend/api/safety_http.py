@@ -65,7 +65,6 @@ class OverrideBody(BaseModel):
     max_session_duration_hours: float | None = None
     max_concurrent_agents: int | None = None
     max_same_file_edits: int | None = None
-    notify_at_burn_ratio: float | None = None
 
 
 @router.get("/sessions/{session_id}/override")
@@ -101,7 +100,6 @@ async def put_session_override(session_id: str, body: OverrideBody) -> dict:
         max_session_duration_hours=body.max_session_duration_hours,
         max_concurrent_agents=body.max_concurrent_agents,
         max_same_file_edits=body.max_same_file_edits,
-        notify_at_burn_ratio=body.notify_at_burn_ratio,
     )
     await save_override(session_id, override)
     return {"ok": True, "session_id": session_id, "override": override.to_dict()}

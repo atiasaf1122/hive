@@ -105,26 +105,10 @@ CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
 CREATE INDEX IF NOT EXISTS idx_events_agent   ON events(agent_id);
 CREATE INDEX IF NOT EXISTS idx_agents_session ON agents(session_id);
 
--- Phase 10 (Production v1.0) — command sandbox + circuit breakers.
-CREATE TABLE IF NOT EXISTS command_audit (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts              DATETIME NOT NULL DEFAULT (datetime('now')),
-    project_id      TEXT NOT NULL DEFAULT '',
-    agent_id        TEXT NOT NULL DEFAULT '',
-    command         TEXT NOT NULL,
-    working_dir     TEXT NOT NULL DEFAULT '',
-    classification  TEXT NOT NULL,         -- 'allowed' | 'confirmed' | 'blocked'
-    decision_source TEXT NOT NULL DEFAULT 'system',  -- 'system' | 'custom'
-    matched_pattern TEXT,
-    exit_code       INTEGER,
-    stdout_excerpt  TEXT,                  -- first 500 chars, truncated
-    stderr_excerpt  TEXT,                  -- first 500 chars, truncated
-    duration_ms     INTEGER,
-    user_approved   INTEGER                -- 1 = yes, 0 = no, NULL = n/a
-);
-CREATE INDEX IF NOT EXISTS idx_command_audit_ts      ON command_audit(ts);
-CREATE INDEX IF NOT EXISTS idx_command_audit_project ON command_audit(project_id);
-CREATE INDEX IF NOT EXISTS idx_command_audit_agent   ON command_audit(agent_id);
+-- Phase A cleanup: the command_audit table (pre-execution command sandbox)
+-- was removed with backend/security/ — no command ever routed through it
+-- because workers run with --dangerously-skip-permissions. Existing DBs
+-- keep the orphan table harmlessly; new DBs don't create it.
 
 -- Phase 10 (Production v1.0) — per-project safety overrides.
 -- One row per session; absent = inherit the build-time HARD_STOPS defaults.
@@ -134,7 +118,6 @@ CREATE TABLE IF NOT EXISTS session_safety_overrides (
     max_session_duration_hours       REAL,
     max_concurrent_agents            INTEGER,
     max_same_file_edits              INTEGER,
-    notify_at_burn_ratio             REAL,
     updated_at                       DATETIME NOT NULL DEFAULT (datetime('now'))
 );
 
