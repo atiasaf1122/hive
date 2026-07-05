@@ -149,3 +149,50 @@ async def test_init_db_idempotent(tmp_db):
     await init_db(tmp_db)
     row = await get_session("nonexistent", db_path=tmp_db)
     assert row is None
+
+
+# ── delete_session_data (hard delete, Phase A) ─────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_delete_session_data_removes_everything(tmp_db):
+    from backend.persistence.events import delete_session_data
+
+    await create_session("del1", name="doomed", db_path=tmp_db)
+    await create_agent("dag1", "del1", role="Builder", model="claude:sonnet",
+                       worktree_path="/tmp/dag1", db_path=tmp_db)
+    await write_event(HiveEvent(
+        type=EventType.TEXT_DONE, agent_id="dag1", session_id="del1", text="hi",
+    ), path=tmp_db)
+    await write_cost("del1", "dag1", 10, 20, 0.01, db_path=tmp_db)
+
+    assert await delete_session_data("del1", db_path=tmp_db) is True
+
+    async with get_conn(tmp_db) as conn:
+        for table in ("sessions", "agents", "events", "cost_log"):
+            col = "id" if table == "sessions" else (
+                "id" if table == "agents" else "session_id")
+            key = "del1" if table in ("sessions", "events", "cost_log") else "dag1"
+            cursor = await conn.execute(
+                f"SELECT COUNT(*) AS n FROM {table} WHERE {col}=?", (key,))
+            row = await cursor.fetchone()
+            assert row["n"] == 0, f"{table} not cleaned"
+
+
+@pytest.mark.asyncio
+async def test_delete_session_data_missing_returns_false(tmp_db):
+    from backend.persistence.events import delete_session_data
+
+    assert await delete_session_data("ghost", db_path=tmp_db) is False
+
+
+@pytest.mark.asyncio
+async def test_delete_session_data_leaves_other_sessions(tmp_db):
+    from backend.persistence.events import delete_session_data
+
+    await create_session("keep", db_path=tmp_db)
+    await create_session("drop", db_path=tmp_db)
+    await delete_session_data("drop", db_path=tmp_db)
+
+    assert await get_session("keep", db_path=tmp_db) is not None
+    assert await get_session("drop", db_path=tmp_db) is None

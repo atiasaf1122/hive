@@ -105,12 +105,12 @@ export function ProjectCard({ project }: Props) {
     if (!confirm(`Delete "${info.name || info.session_id}" permanently?\nThe SQLite history is dropped — this can't be undone.`)) return
     try {
       await api.delete(`/api/sessions/${info.session_id}`)
+      removeFromStore(info.session_id)
     } catch (e) {
-      // The DELETE endpoint may not exist yet — still remove from local store
-      // so the user gets immediate feedback. 9D adds proper backend deletion.
-      console.warn('delete endpoint not available, removing locally only', e)
+      // Keep the card — deleting only the local view while claiming the
+      // history was dropped would be a lie.
+      toast.error(`Delete failed: ${e instanceof Error ? e.message : e}`)
     }
-    removeFromStore(info.session_id)
   }
 
   async function exportToMarkdown() {

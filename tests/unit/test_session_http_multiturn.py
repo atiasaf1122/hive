@@ -377,3 +377,29 @@ def test_cancel_resolves_pending_input_with_close_not_cancel(client: TestClient)
     # task.cancel must NOT have been called either when we took the
     # parked path — the runner is unwinding on its own.
     task.cancel.assert_not_called()
+
+
+# ── DELETE /sessions/{id} (hard delete) ────────────────────────────────────
+
+
+def test_delete_session_endpoint(client: TestClient) -> None:
+    wt = AsyncMock()
+    with patch("backend.api.http.get_session",
+               new_callable=AsyncMock, return_value=_fake_session("d1")), \
+         patch("backend.api.http.delete_session_data",
+               new_callable=AsyncMock, return_value=True) as deleter, \
+         patch("backend.worktrees.manager.WorktreeManager") as manager_cls:
+        manager_cls.return_value.remove_session_worktrees = wt
+        resp = client.delete("/api/sessions/d1")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "status": "deleted"}
+    deleter.assert_awaited_once_with("d1")
+    wt.assert_awaited_once()
+
+
+def test_delete_session_404_on_missing(client: TestClient) -> None:
+    with patch("backend.api.http.get_session",
+               new_callable=AsyncMock, return_value=None):
+        resp = client.delete("/api/sessions/ghost")
+    assert resp.status_code == 404

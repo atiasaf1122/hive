@@ -31,6 +31,7 @@ from backend.orchestrator.graph import (
 from backend.persistence.events import (
     create_pending_approval,
     create_session as db_create_session,
+    delete_session_data,
     get_pending_approval,
     get_session,
     list_agents,
@@ -710,6 +711,42 @@ async def close_session(session_id: str) -> dict:
         "session_id": session_id,
     })
     return {"ok": True, "status": "closed"}
+
+
+@router.delete("/sessions/{session_id}")
+async def delete_session(session_id: str) -> dict:
+    """Permanently delete a session: SQLite history, checkpoints, worktrees.
+
+    Matches the UI's "Delete permanently" promise — this is a hard delete
+    and cannot be undone. A live runner is cancelled first.
+    """
+    session = await get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Tear down any live runner via the same path /cancel uses — it kills
+    # worker subprocesses and releases parked futures cleanly.
+    if session_id in _running_tasks or _pending_inputs.get(session_id) is not None:
+        await cancel_session(session_id)
+
+    # Worktrees before DB rows (we need sessions.path to find them).
+    project_path = session.get("path") or ""
+    if project_path:
+        try:
+            from backend.worktrees.manager import WorktreeManager
+            await WorktreeManager(
+                session_id=session_id, project_path=project_path
+            ).remove_session_worktrees()
+        except Exception as exc:
+            logger.warning("Worktree cleanup failed for %s: %s", session_id, exc)
+
+    await delete_session_data(session_id)
+    await event_bus.emit(session_id, {
+        "type": "session_deleted",
+        "session_id": session_id,
+    })
+    event_bus.remove(session_id)
+    return {"ok": True, "status": "deleted"}
 
 
 @router.post("/sessions/{session_id}/cancel")

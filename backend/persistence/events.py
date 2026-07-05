@@ -154,6 +154,50 @@ async def list_sessions(limit: int = 20, db_path: Path = DB_PATH) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+async def delete_session_data(session_id: str, db_path: Path = DB_PATH) -> bool:
+    """Hard-delete a session and everything keyed to it.
+
+    Removes the session row plus agents, events, cost_log, pending
+    approvals, safety overrides, and (best-effort) the LangGraph
+    checkpoint rows for the thread. Returns False if the session
+    didn't exist.
+    """
+    async with get_conn(db_path) as conn:
+        cursor = await conn.execute(
+            "SELECT 1 FROM sessions WHERE id=?", (session_id,)
+        )
+        if await cursor.fetchone() is None:
+            return False
+
+        for table, col in (
+            ("events", "session_id"),
+            ("cost_log", "session_id"),
+            ("agents", "session_id"),
+            ("pending_approvals", "session_id"),
+            ("session_safety_overrides", "session_id"),
+        ):
+            await conn.execute(f"DELETE FROM {table} WHERE {col}=?", (session_id,))
+
+        # LangGraph checkpointer tables share this DB file, keyed by
+        # thread_id == session_id. They may not exist yet (fresh DB where
+        # no graph ever ran), so each delete is best-effort.
+        for table in (
+            "checkpoints",
+            "checkpoint_writes",
+            "checkpoint_blobs",
+        ):
+            try:
+                await conn.execute(
+                    f"DELETE FROM {table} WHERE thread_id=?", (session_id,)
+                )
+            except aiosqlite.OperationalError:
+                pass  # table doesn't exist — nothing to clean
+
+        await conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
+        await conn.commit()
+    return True
+
+
 async def get_session(session_id: str, db_path: Path = DB_PATH) -> dict | None:
     async with get_conn(db_path) as conn:
         cursor = await conn.execute(
