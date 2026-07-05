@@ -176,11 +176,16 @@ def test_approve_session_resolves_future(client: TestClient):
 
 def test_send_message_emits_to_queue(client: TestClient):
     remove("msg-test-sess")
-    resp = client.post("/api/sessions/msg-test-sess/message", json={
-        "text": "Hello agent",
-        "agent_id": "builder-1",
-        "urgency": "question",
-    })
+    fake_session = {"id": "msg-test-sess", "name": "t", "path": "/tmp",
+                    "status": "active", "approval_mode": "full-auto"}
+    with patch("backend.api.http.get_session",
+               new_callable=AsyncMock, return_value=fake_session), \
+         patch("backend.api.http._relaunch_for_resume", new_callable=AsyncMock):
+        resp = client.post("/api/sessions/msg-test-sess/message", json={
+            "text": "Hello agent",
+            "agent_id": "builder-1",
+            "urgency": "question",
+        })
     assert resp.status_code == 200
     q = get_or_create("msg-test-sess")
     item = q.get_nowait()

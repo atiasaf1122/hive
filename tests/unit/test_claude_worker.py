@@ -56,6 +56,21 @@ async def test_agent_start_from_init_event():
 
 
 @pytest.mark.asyncio
+async def test_agent_start_carries_subprocess_pid():
+    """AGENT_START must be stamped with the subprocess PID so the
+    orchestrator can persist it (agents.pid) for restart recovery."""
+    proc = _build_mock_process({"type": "system", "subtype": "init"})
+    with patch("asyncio.create_subprocess_exec", return_value=proc), \
+         patch("os.getpgid", return_value=1):
+        worker = ClaudeCLIWorker(oauth_token="test-token")
+        events = [e async for e in worker.run("hello", _make_config())]
+
+    starts = [e for e in events if e.type == EventType.AGENT_START]
+    assert len(starts) == 1
+    assert starts[0].pid == 12345
+
+
+@pytest.mark.asyncio
 async def test_text_done_forwarded():
     """The consolidated `assistant` message arrives as TEXT_DONE so
     consumers don't double-count partial deltas + final text."""

@@ -23,6 +23,7 @@ from backend.api.schemas import (
 from backend.orchestrator.graph import (
     SessionInterrupt,
     get_conversation_history,
+    resume_session,
     resume_session_with_value,
     run_session,
 )
@@ -91,11 +92,22 @@ async def _session_runner(
     approval_mode: str,
     project_path: str,
     max_turns: int,
+    resume: bool = False,
 ) -> None:
     """Drive a long-lived session: orchestrator turns, approvals, agent runs,
-    and parking for the next user message — until the user closes the project."""
+    and parking for the next user message — until the user closes the project.
+
+    `resume=True` re-attaches a runner to an existing session (after a backend
+    restart left it 'idle'): instead of starting a fresh graph run, we pick up
+    from the LangGraph checkpoint — usually a parked awaiting_input interrupt —
+    and enter the same interrupt loop.
+    """
     agent_id = f"worker-{session_id[:8]}"
-    await event_bus.emit(session_id, {"type": "session_start", "session_id": session_id, "task": task})
+    await event_bus.emit(session_id, {
+        "type": "session_resumed" if resume else "session_start",
+        "session_id": session_id,
+        "task": task,
+    })
 
     # Watchdog: if the orchestrator's first claude subprocess doesn't
     # emit anything for ORCH_STALL_WARN_S, push a diagnostic event so
@@ -143,15 +155,29 @@ async def _session_runner(
     # snake/tetris build.
     close_requested = False
     try:
-        result = await run_session(
-            session_id=session_id,
-            agent_id=agent_id,
-            task=task,
-            model=model,
-            worktree_path=project_path,
-            max_turns=max_turns,
-            approval_mode=approval_mode,
-        )
+        if resume:
+            result = await resume_session(session_id)
+            if result is None:
+                # No checkpoint — the session row exists but the graph never
+                # ran (or the checkpoint DB was wiped). Nothing to resume.
+                logger.warning("Session %s has no checkpoint to resume", session_id)
+                await event_bus.emit(session_id, {
+                    "type": "session_error",
+                    "session_id": session_id,
+                    "error": "Nothing to resume — this session has no saved state.",
+                })
+                await update_session_status(session_id, "idle")
+                return
+        else:
+            result = await run_session(
+                session_id=session_id,
+                agent_id=agent_id,
+                task=task,
+                model=model,
+                worktree_path=project_path,
+                max_turns=max_turns,
+                approval_mode=approval_mode,
+            )
 
         while isinstance(result, SessionInterrupt):
             # If /close was POSTed while we were mid-execution, honour it
@@ -287,6 +313,7 @@ def launch_session(
     approval_mode: str,
     project_path: str,
     max_turns: int = 20,
+    resume: bool = False,
 ) -> asyncio.Task:
     """Create and register a background session task. Used by HTTP endpoints and the scheduler."""
     t = asyncio.create_task(
@@ -297,11 +324,26 @@ def launch_session(
             approval_mode=approval_mode,
             project_path=project_path,
             max_turns=max_turns,
+            resume=resume,
         ),
         name=f"session-{session_id}",
     )
     _running_tasks[session_id] = t
     return t
+
+
+async def _relaunch_for_resume(session: dict) -> None:
+    """Mark an idle session active again and re-attach a runner to it."""
+    session_id = session["id"]
+    await update_session_status(session_id, "active")
+    launch_session(
+        session_id=session_id,
+        task=session.get("name", ""),
+        model="claude:sonnet",  # unused on the resume path (graph state has it)
+        approval_mode=session.get("approval_mode", "full-auto"),
+        project_path=session.get("path", ""),
+        resume=True,
+    )
 
 
 # ── REST endpoints ───────────────────────────────────────────────────────────
@@ -577,16 +619,44 @@ async def list_session_approvals(session_id: str) -> dict:
     return {"session_id": session_id, "approvals": rows}
 
 
+@router.post("/sessions/{session_id}/resume")
+async def resume_session_endpoint(session_id: str) -> dict:
+    """Re-attach a runner to a session left 'idle' by a backend restart.
+
+    The graph resumes from its LangGraph checkpoint (usually a parked
+    awaiting_input interrupt). No-op if a runner is already attached.
+    """
+    session = await get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session_id in _running_tasks:
+        return {"ok": True, "status": "already-running"}
+    if session["status"] in ("closed", "failed"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Session is {session['status']} — start a new session instead.",
+        )
+    await _relaunch_for_resume(session)
+    return {"ok": True, "status": "resuming"}
+
+
 @router.post("/sessions/{session_id}/message")
 async def send_message(session_id: str, req: MessageRequest) -> dict:
     """Send a message to the orchestrator.
 
     If the graph is parked waiting for input → resume immediately.
     Otherwise (agents running, awaiting approval) → queue for next park.
+    If no runner is attached (idle after a backend restart) → queue the
+    message and auto-resume; the resumed graph consumes the queue at its
+    parked awaiting_input interrupt.
     """
     text = (req.text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="Empty message")
+
+    session = await get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
 
     await event_bus.emit(session_id, {
         "type": "user_message",
@@ -603,6 +673,14 @@ async def send_message(session_id: str, req: MessageRequest) -> dict:
         return {"ok": True, "queued": False}
 
     _get_queue(session_id).append(text)
+
+    # No live runner (backend restarted while this session was parked) —
+    # re-attach one so the queued message is actually consumed instead of
+    # sitting in an in-memory deque forever.
+    if session_id not in _running_tasks and session["status"] not in ("closed", "failed"):
+        await _relaunch_for_resume(session)
+        return {"ok": True, "queued": True, "resumed": True}
+
     return {"ok": True, "queued": True}
 
 

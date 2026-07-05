@@ -39,7 +39,13 @@ async def detect_crashed_agents(db_path: Path = DB_PATH) -> list[dict]:
 
 
 async def mark_agents_crashed(agent_ids: list[str], db_path: Path = DB_PATH) -> None:
-    """Mark a list of agents as crashed in the DB."""
+    """Mark a list of agents as crashed in the DB.
+
+    Deliberately does NOT touch the sessions table: a session whose agents
+    died is still resumable from its LangGraph checkpoint, so it becomes
+    'idle' via `reconcile_idle_sessions` rather than 'failed'. 'failed' is
+    reserved for runtime runner exceptions (see api/http.py).
+    """
     if not agent_ids:
         return
     async with get_conn(db_path) as conn:
@@ -47,19 +53,32 @@ async def mark_agents_crashed(agent_ids: list[str], db_path: Path = DB_PATH) -> 
             "UPDATE agents SET status='crashed', ended_at=datetime('now') WHERE id=?",
             [(aid,) for aid in agent_ids],
         )
-        # Mark their sessions as failed if all agents in the session are done
-        await conn.execute("""
-            UPDATE sessions SET status='failed'
-            WHERE id IN (
-                SELECT DISTINCT session_id FROM agents WHERE id IN ({})
-            )
-            AND NOT EXISTS (
-                SELECT 1 FROM agents
-                WHERE session_id = sessions.id AND status = 'active'
-            )
-        """.format(",".join("?" * len(agent_ids))), agent_ids)
         await conn.commit()
     logger.info("Marked %d agent(s) as crashed: %s", len(agent_ids), agent_ids)
+
+
+async def reconcile_idle_sessions(db_path: Path = DB_PATH) -> int:
+    """Move parked-but-orphaned sessions from 'active' to 'idle'.
+
+    Runs at startup, when no session runner exists yet by definition. Any
+    session still marked 'active' with no live agent rows is a conversation
+    parked between turns whose backend went away — it is resumable, not
+    running. Before this pass existed such sessions stayed 'active' forever
+    (the stuck-sessions bug): recovery only reached sessions transitively
+    through crashed agents and never scanned the sessions table itself.
+
+    Idempotent: already-'idle' rows don't match the WHERE clause, and
+    'closed'/'failed' sessions are never touched. Deliberately does not
+    bump last_active — reconciliation is bookkeeping, not user activity.
+    """
+    async with get_conn(db_path) as conn:
+        cursor = await conn.execute(
+            "UPDATE sessions SET status='idle' "
+            "WHERE status='active' "
+            "AND id NOT IN (SELECT session_id FROM agents WHERE status='active')"
+        )
+        await conn.commit()
+        return cursor.rowcount
 
 
 async def expire_pending_approvals(db_path: Path = DB_PATH) -> int:
@@ -94,6 +113,15 @@ async def run_startup_recovery(db_path: Path = DB_PATH) -> list[dict]:
             "Recovered %d crashed agent(s) from previous session", len(crashed)
         )
 
+    idled = await reconcile_idle_sessions(db_path)
+    if idled:
+        logger.warning(
+            "Reconciled %d orphaned 'active' session(s) to 'idle'", idled
+        )
+
+    # Runs AFTER idle reconciliation on purpose: approvals belonging to
+    # now-idle sessions are stale (a resumed runner re-registers a fresh
+    # correlation id for any replayed interrupt), so they should expire.
     expired = await expire_pending_approvals(db_path)
     if expired:
         logger.warning(

@@ -105,6 +105,11 @@ class ClaudeCLIWorker:
 
         try:
             async for event in parse_stream(proc.stdout, config):  # type: ignore[arg-type]
+                # Stamp the subprocess PID onto the start event so the
+                # orchestrator can persist it (agents.pid) — recovery uses
+                # it to tell a live agent from a crashed one after restart.
+                if event.type == EventType.AGENT_START and event.pid is None:
+                    event.pid = proc.pid
                 yield event
 
                 # If the stream signals a rate limit, wait before next read.

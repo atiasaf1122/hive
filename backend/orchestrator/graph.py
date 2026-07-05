@@ -805,7 +805,15 @@ async def _execute_worker(
                 "tool_result_error": event.tool_result_error,
             })
 
-            if event.type == EventType.TEXT_DELTA and event.text:
+            if event.type == EventType.AGENT_START and event.pid:
+                # Persist the worker's OS PID so startup recovery can check
+                # process liveness instead of assuming every restart-orphaned
+                # agent crashed (agents.pid was previously never written).
+                try:
+                    await update_agent_status(agent.agent_id, "active", pid=event.pid)
+                except Exception as exc:
+                    logger.warning("PID write failed for %s: %s", agent.agent_id, exc)
+            elif event.type == EventType.TEXT_DELTA and event.text:
                 text_parts.append(event.text)
             elif event.type == EventType.TEXT_DONE and event.text:
                 # Consolidated assistant message — supersedes the

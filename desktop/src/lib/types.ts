@@ -5,6 +5,7 @@
 
 export type SessionStatus =
   | 'active'
+  | 'idle'
   | 'starting'
   | 'planning'
   | 'spawning'

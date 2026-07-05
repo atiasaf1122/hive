@@ -31,6 +31,14 @@ def client():
     http_mod._message_queues.clear()
 
 
+def _fake_session(session_id: str, status: str = "active") -> dict:
+    return {
+        "id": session_id, "name": "t", "path": "/tmp", "type": "one-shot",
+        "status": status, "approval_mode": "full-auto",
+        "created_at": "", "last_active": "",
+    }
+
+
 def test_message_resolves_pending_input_future(client: TestClient) -> None:
     """If the runner has a future parked, /message resolves it directly (not queued)."""
     loop = asyncio.new_event_loop()
@@ -39,7 +47,9 @@ def test_message_resolves_pending_input_future(client: TestClient) -> None:
         future: asyncio.Future = loop.create_future()
         http_mod._pending_inputs["s1"] = future
 
-        resp = client.post("/api/sessions/s1/message", json={"text": "hello orchestrator"})
+        with patch("backend.api.http.get_session",
+                   new_callable=AsyncMock, return_value=_fake_session("s1")):
+            resp = client.post("/api/sessions/s1/message", json={"text": "hello orchestrator"})
         assert resp.status_code == 200
         assert resp.json() == {"ok": True, "queued": False}
         assert future.done()
@@ -49,11 +59,83 @@ def test_message_resolves_pending_input_future(client: TestClient) -> None:
 
 
 def test_message_queues_when_no_pending_future(client: TestClient) -> None:
-    """If no future is parked (e.g. agents running), /message queues the text."""
-    resp = client.post("/api/sessions/s2/message", json={"text": "queued msg"})
+    """If no future is parked and no runner is attached, /message queues the
+    text AND auto-resumes the session so the queue is actually consumed
+    (previously the message sat in an in-memory deque forever)."""
+    with patch("backend.api.http.get_session",
+               new_callable=AsyncMock, return_value=_fake_session("s2")), \
+         patch("backend.api.http._relaunch_for_resume",
+               new_callable=AsyncMock) as relaunch:
+        resp = client.post("/api/sessions/s2/message", json={"text": "queued msg"})
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "queued": True, "resumed": True}
+    assert list(http_mod._get_queue("s2")) == ["queued msg"]
+    relaunch.assert_awaited_once()
+
+
+def test_message_queues_without_resume_when_runner_live(client: TestClient) -> None:
+    """A live runner (agents mid-flight) means queue only — no relaunch."""
+    from unittest.mock import MagicMock
+
+    http_mod._running_tasks["s2b"] = MagicMock()
+    with patch("backend.api.http.get_session",
+               new_callable=AsyncMock, return_value=_fake_session("s2b")), \
+         patch("backend.api.http._relaunch_for_resume",
+               new_callable=AsyncMock) as relaunch:
+        resp = client.post("/api/sessions/s2b/message", json={"text": "queued msg"})
     assert resp.status_code == 200
     assert resp.json() == {"ok": True, "queued": True}
-    assert list(http_mod._get_queue("s2")) == ["queued msg"]
+    relaunch.assert_not_awaited()
+
+
+def test_message_unknown_session_404(client: TestClient) -> None:
+    """Messaging a nonexistent session must 404 instead of silently queueing."""
+    with patch("backend.api.http.get_session",
+               new_callable=AsyncMock, return_value=None):
+        resp = client.post("/api/sessions/nope/message", json={"text": "hi"})
+    assert resp.status_code == 404
+
+
+# ── /resume (re-attach a runner after restart) ─────────────────────────────
+
+
+def test_resume_idle_session_relaunches(client: TestClient) -> None:
+    with patch("backend.api.http.get_session",
+               new_callable=AsyncMock, return_value=_fake_session("r1", status="idle")), \
+         patch("backend.api.http._relaunch_for_resume",
+               new_callable=AsyncMock) as relaunch:
+        resp = client.post("/api/sessions/r1/resume")
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "status": "resuming"}
+    relaunch.assert_awaited_once()
+
+
+def test_resume_unknown_session_404(client: TestClient) -> None:
+    with patch("backend.api.http.get_session",
+               new_callable=AsyncMock, return_value=None):
+        resp = client.post("/api/sessions/ghost/resume")
+    assert resp.status_code == 404
+
+
+def test_resume_closed_session_409(client: TestClient) -> None:
+    with patch("backend.api.http.get_session",
+               new_callable=AsyncMock, return_value=_fake_session("r2", status="closed")):
+        resp = client.post("/api/sessions/r2/resume")
+    assert resp.status_code == 409
+
+
+def test_resume_noop_when_runner_live(client: TestClient) -> None:
+    from unittest.mock import MagicMock
+
+    http_mod._running_tasks["r3"] = MagicMock()
+    with patch("backend.api.http.get_session",
+               new_callable=AsyncMock, return_value=_fake_session("r3")), \
+         patch("backend.api.http._relaunch_for_resume",
+               new_callable=AsyncMock) as relaunch:
+        resp = client.post("/api/sessions/r3/resume")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "already-running"
+    relaunch.assert_not_awaited()
 
 
 def test_message_empty_text_rejected(client: TestClient) -> None:

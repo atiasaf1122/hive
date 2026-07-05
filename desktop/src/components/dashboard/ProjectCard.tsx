@@ -29,6 +29,7 @@ import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu'
 
 const STATUS_TONE: Record<string, { stripe: string; dot: string; label: string }> = {
   active: { stripe: 'bg-emerald-400', dot: 'bg-emerald-400', label: 'active' },
+  idle: { stripe: 'bg-violet-400', dot: 'bg-violet-400', label: 'idle — resumable' },
   running: { stripe: 'bg-emerald-400', dot: 'bg-emerald-400 animate-pulse', label: 'running' },
   starting: { stripe: 'bg-amber-400', dot: 'bg-amber-400 animate-pulse', label: 'starting' },
   planning: { stripe: 'bg-amber-400', dot: 'bg-amber-400 animate-pulse', label: 'planning' },
@@ -84,6 +85,20 @@ export function ProjectCard({ project }: Props) {
     try {
       await api.post(`/api/sessions/${info.session_id}/close`)
     } catch { /* noop — backend may already be closed */ }
+  }
+
+  async function resumeSession() {
+    try {
+      await api.post(`/api/sessions/${info.session_id}/resume`)
+      useSessions.setState((s) => {
+        const p = s.sessions[info.session_id]
+        if (!p) return s
+        return { sessions: { ...s.sessions, [info.session_id]: { ...p, info: { ...p.info, status: 'active' } } } }
+      })
+      openProject()
+    } catch (e) {
+      toast.error(`Couldn't resume: ${e instanceof Error ? e.message : e}`)
+    }
   }
 
   async function deletePermanently() {
@@ -154,6 +169,9 @@ export function ProjectCard({ project }: Props) {
   }
 
   const menuItems: ContextMenuItem[] = [
+    ...(info.status === 'idle'
+      ? [{ label: 'Resume', icon: <IconExternalLink size={14} />, onClick: () => void resumeSession() }]
+      : []),
     { label: 'Open', icon: <IconExternalLink size={14} />, onClick: openProject },
     { label: 'Rename', icon: <IconPencil size={14} />, onClick: rename },
     { label: 'Save as template', icon: <IconBookmarkPlus size={14} />, onClick: saveAsTemplate },

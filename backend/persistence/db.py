@@ -24,7 +24,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     name        TEXT NOT NULL DEFAULT '',
     path        TEXT NOT NULL DEFAULT '',
     type        TEXT NOT NULL DEFAULT 'one-shot',   -- 'one-shot' | 'persistent'
-    status      TEXT NOT NULL DEFAULT 'active',     -- 'active' | 'completed' | 'failed' | 'archived'
+    status      TEXT NOT NULL DEFAULT 'active',     -- 'active' | 'idle' | 'closed' | 'failed'
+                                                    -- idle = parked between turns with no live
+                                                    -- runner/agents; resumable from checkpoint
     approval_mode TEXT NOT NULL DEFAULT 'full-auto',
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     last_active TEXT NOT NULL DEFAULT (datetime('now'))

@@ -64,6 +64,11 @@ class HiveEvent(BaseModel):
     error: str | None = None
     retry_after_ms: int | None = None
 
+    # EventType.AGENT_START — OS process id of the spawned worker, when the
+    # backend runs one (Claude CLI subprocess). Persisted to agents.pid so
+    # startup recovery can distinguish "still running" from "crashed".
+    pid: int | None = None
+
     # EventType.RAW — full original payload for debugging
     raw_payload: dict[str, Any] | None = None
 

@@ -18,6 +18,7 @@ from backend.persistence.recovery import (
     _pid_alive,
     detect_crashed_agents,
     mark_agents_crashed,
+    reconcile_idle_sessions,
     run_startup_recovery,
 )
 
@@ -102,8 +103,10 @@ async def test_mark_crashed_updates_status(db: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_mark_crashed_marks_session_failed_when_all_done(db: Path) -> None:
-    """If every agent in a session is non-active after the update, the session is failed."""
+async def test_mark_crashed_does_not_touch_session(db: Path) -> None:
+    """mark_agents_crashed only flags agents — session disposition is the
+    idle-reconciliation pass's job (a crashed-agent session is resumable
+    from its checkpoint, so it must not be force-failed)."""
     await create_session("s5", db_path=db)
     await create_agent("a5", "s5", role="Builder", model="claude:sonnet", worktree_path="/tmp/a5", db_path=db)
     await mark_agents_crashed(["a5"], db_path=db)
@@ -111,7 +114,7 @@ async def test_mark_crashed_marks_session_failed_when_all_done(db: Path) -> None
     async with get_conn(db) as conn:
         cursor = await conn.execute("SELECT status FROM sessions WHERE id=?", ("s5",))
         row = await cursor.fetchone()
-    assert row["status"] == "failed"
+    assert row["status"] == "active"
 
 
 @pytest.mark.asyncio
@@ -134,6 +137,86 @@ async def test_mark_crashed_leaves_session_active_if_other_agents_running(db: Pa
 async def test_mark_crashed_empty_list_noop(db: Path) -> None:
     """An empty list must not crash or mutate anything."""
     await mark_agents_crashed([], db_path=db)  # should return cleanly
+
+
+# ── reconcile_idle_sessions (the stuck-'active' fix) ─────────────────────────
+
+@pytest.mark.asyncio
+async def test_reconcile_marks_agentless_active_session_idle(db: Path) -> None:
+    """An 'active' session with no live agents (parked between turns when
+    the backend died) is reconciled to 'idle', not left stuck."""
+    await create_session("stuck", db_path=db)  # default status 'active', zero agents
+    changed = await reconcile_idle_sessions(db_path=db)
+    assert changed == 1
+
+    async with get_conn(db) as conn:
+        cursor = await conn.execute("SELECT status FROM sessions WHERE id=?", ("stuck",))
+        row = await cursor.fetchone()
+    assert row["status"] == "idle"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_is_idempotent(db: Path) -> None:
+    await create_session("stuck2", db_path=db)
+    first = await reconcile_idle_sessions(db_path=db)
+    second = await reconcile_idle_sessions(db_path=db)
+    assert first == 1
+    assert second == 0  # already idle — nothing to do
+
+    async with get_conn(db) as conn:
+        cursor = await conn.execute("SELECT status FROM sessions WHERE id=?", ("stuck2",))
+        row = await cursor.fetchone()
+    assert row["status"] == "idle"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_leaves_sessions_with_live_agents_active(db: Path) -> None:
+    await create_session("live", db_path=db)
+    await create_agent("la1", "live", role="Builder", model="claude:sonnet", worktree_path="/tmp/la1", db_path=db)
+    # Agent row is status='active' → session must stay active.
+    changed = await reconcile_idle_sessions(db_path=db)
+    assert changed == 0
+
+    async with get_conn(db) as conn:
+        cursor = await conn.execute("SELECT status FROM sessions WHERE id=?", ("live",))
+        row = await cursor.fetchone()
+    assert row["status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_never_touches_closed_or_failed(db: Path) -> None:
+    from backend.persistence.events import update_session_status
+
+    await create_session("done", db_path=db)
+    await update_session_status("done", "closed", db_path=db)
+    await create_session("bad", db_path=db)
+    await update_session_status("bad", "failed", db_path=db)
+
+    changed = await reconcile_idle_sessions(db_path=db)
+    assert changed == 0
+
+    async with get_conn(db) as conn:
+        cursor = await conn.execute("SELECT id, status FROM sessions ORDER BY id")
+        rows = {r["id"]: r["status"] for r in await cursor.fetchall()}
+    assert rows == {"bad": "failed", "done": "closed"}
+
+
+@pytest.mark.asyncio
+async def test_full_recovery_moves_crashed_agent_session_to_idle(db: Path) -> None:
+    """End-to-end: dead-PID agent → agent 'crashed', session 'idle' (resumable)."""
+    await create_session("s-crash", db_path=db)
+    await create_agent("ac1", "s-crash", role="Builder", model="claude:sonnet", worktree_path="/tmp/ac1", db_path=db)
+    await _set_pid(db, "ac1", 999_999_995)
+
+    await run_startup_recovery(db_path=db)
+
+    async with get_conn(db) as conn:
+        cursor = await conn.execute("SELECT status FROM agents WHERE id=?", ("ac1",))
+        agent_row = await cursor.fetchone()
+        cursor = await conn.execute("SELECT status FROM sessions WHERE id=?", ("s-crash",))
+        session_row = await cursor.fetchone()
+    assert agent_row["status"] == "crashed"
+    assert session_row["status"] == "idle"
 
 
 # ── run_startup_recovery (full pass) ─────────────────────────────────────────
