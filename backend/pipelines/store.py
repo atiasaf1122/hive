@@ -4,13 +4,14 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
+from backend.models import DEFAULT_MODEL
 from backend.persistence.db import DB_PATH, get_conn
 
 
 async def create_pipeline(
     name: str,
     task: str,
-    model: str = "claude:sonnet",
+    model: str = DEFAULT_MODEL,
     approval_mode: str = "full-auto",
     schedule: str | None = None,
     db_path: Path = DB_PATH,

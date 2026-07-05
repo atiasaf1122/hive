@@ -19,12 +19,13 @@ import json
 import logging
 from pathlib import Path
 
+from backend.models import DEFAULT_MODEL
 from backend.workers.base import EventType, WorkerConfig
 from backend.workers.claude_cli import ClaudeCLIWorker
 
 logger = logging.getLogger(__name__)
 
-PLANNER_MODEL = "claude:sonnet"
+PLANNER_MODEL = DEFAULT_MODEL
 
 _INSTRUCTIONS = """You are the Orchestrator for HIVE, an AI agent swarm.
 The user is your permanent contact for this project — they may send many messages over its lifetime.

@@ -20,6 +20,7 @@ from backend.api.schemas import (
     MessageRequest,
     SessionInfo,
 )
+from backend.models import DEFAULT_MODEL
 from backend.orchestrator.graph import (
     SessionInterrupt,
     get_conversation_history,
@@ -339,7 +340,7 @@ async def _relaunch_for_resume(session: dict) -> None:
     launch_session(
         session_id=session_id,
         task=session.get("name", ""),
-        model="claude:sonnet",  # unused on the resume path (graph state has it)
+        model=DEFAULT_MODEL,  # unused on the resume path (graph state has it)
         approval_mode=session.get("approval_mode", "full-auto"),
         project_path=session.get("path", ""),
         resume=True,

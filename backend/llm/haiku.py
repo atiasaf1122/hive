@@ -9,7 +9,7 @@ Three places already accept a `haiku_caller=` injection point:
 `HaikuCaller` is the production implementation behind all of them. It
 wraps `ClaudeCLIWorker` (or any other `Worker`) and:
 
-  1. Spawns a single-turn run with `--model claude-haiku-4-5`.
+  1. Spawns a single-turn run with `--model haiku` (see backend/models.py).
   2. Collects TEXT_DELTA events into a final response string.
   3. Records token + USD cost via `backend.persistence.events.write_cost`
      so the existing /api/cost dashboard picks it up automatically.
@@ -33,6 +33,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Protocol, runtime_checkable
 
+from backend.models import HAIKU_MODEL
 from backend.workers.base import EventType, HiveEvent, WorkerConfig
 
 logger = logging.getLogger(__name__)
@@ -92,7 +93,7 @@ class HaikuCaller:
         config = WorkerConfig(
             agent_id=agent_id,
             session_id=self.session_id,
-            model="claude:haiku",
+            model=HAIKU_MODEL,
             worktree_path=self.worktree_path,
             max_turns=1,
         )

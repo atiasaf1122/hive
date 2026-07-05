@@ -46,8 +46,8 @@ interface ModelOption {
 }
 
 const BASE_MODELS: ModelOption[] = [
-  { value: 'claude:opus',   label: 'Claude Opus 4.7',  tier: 'recommended', hint: 'Best at planning. The architectural recommendation.' },
-  { value: 'claude:sonnet', label: 'Claude Sonnet 4.6', tier: 'standard',  hint: 'Solid + cheaper. Fine for routine orchestration.' },
+  { value: 'claude:opus',   label: 'Claude Opus 4.8',  tier: 'recommended', hint: 'Best at planning. The architectural recommendation.' },
+  { value: 'claude:sonnet', label: 'Claude Sonnet 5', tier: 'standard',  hint: 'Solid + cheaper. Fine for routine orchestration.' },
   { value: 'claude:haiku',  label: 'Claude Haiku 4.5', tier: 'cheap',      hint: 'Fast and cheap; may miss nuance on complex teams.' },
 ]
 

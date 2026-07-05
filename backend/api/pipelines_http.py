@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from backend.models import DEFAULT_MODEL
 from backend.persistence.db import DB_PATH
 from backend.persistence.events import create_session as db_create_session
 from backend.pipelines.scheduler import sync_pipeline_schedule
@@ -28,7 +29,7 @@ router = APIRouter(prefix="/api/pipelines")
 class CreatePipelineRequest(BaseModel):
     name: str
     task: str
-    model: str = "claude:sonnet"
+    model: str = DEFAULT_MODEL
     approval_mode: str = "full-auto"
     schedule: str | None = None
 

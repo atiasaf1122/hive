@@ -3,10 +3,12 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
+from backend.models import DEFAULT_MODEL
+
 
 class CreateSessionRequest(BaseModel):
     task: str
-    model: str = "claude:sonnet"
+    model: str = DEFAULT_MODEL
     approval_mode: str = "full-auto"
     project_path: str | None = None
     max_turns: int = 20

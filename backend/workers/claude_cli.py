@@ -13,6 +13,7 @@ import signal
 from collections.abc import AsyncIterator
 from typing import ClassVar
 
+from backend.models import resolve_cli_model
 from backend.workers.base import EventType, HiveEvent, WorkerConfig
 from backend.workers.stream_parser import parse_stream
 
@@ -60,9 +61,10 @@ class ClaudeCLIWorker:
 
         if config.model and config.model.startswith("claude:"):
             model_name = config.model.split(":", 1)[1]
-            # Map shorthand to full model ID
-            model_name = _resolve_model(model_name)
-            cmd += ["--model", model_name]
+            # Tier aliases ('sonnet', 'opus', 'haiku') pass through — the
+            # claude CLI resolves them to the latest model itself, so HIVE
+            # never pins dated IDs. See backend/models.py.
+            cmd += ["--model", resolve_cli_model(model_name)]
 
         # Allowed-tools whitelist — used by the planner to enforce
         # read-only access (it kept silently writing files in /tmp
@@ -174,16 +176,3 @@ class ClaudeCLIWorker:
             pass  # already gone
         finally:
             self._processes.pop(agent_id, None)
-
-
-def _resolve_model(shorthand: str) -> str:
-    """Map friendly model names to full Claude model IDs."""
-    _MAP = {
-        "opus": "claude-opus-4-7",
-        "opus-4": "claude-opus-4-7",
-        "sonnet": "claude-sonnet-4-6",
-        "sonnet-4": "claude-sonnet-4-6",
-        "haiku": "claude-haiku-4-5",
-        "haiku-4": "claude-haiku-4-5",
-    }
-    return _MAP.get(shorthand.lower(), shorthand)
