@@ -8,7 +8,7 @@ The graph loops via `wait_for_user_node` which interrupts until a new message
 from __future__ import annotations
 
 from typing import Annotated, Any
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 
 from langgraph.graph.message import add_messages
 
@@ -21,6 +21,13 @@ class AgentResult(TypedDict):
     output_tokens: int
     cost_usd: float
     error: str | None
+    # B3: compact Haiku summary — what the orchestrator sees in history
+    # (full output stays in the events table).
+    summary: NotRequired[str]
+    # B4: deterministic-validator verdict. None/absent = not validated
+    # (agent failed before validation, or the collector couldn't run).
+    validation_passed: NotRequired[bool | None]
+    validation_findings: NotRequired[list[str]]
 
 
 class GraphState(TypedDict):

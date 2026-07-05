@@ -389,10 +389,13 @@ async def review_node(state: GraphState) -> dict:
     total_in = sum(r["input_tokens"] for r in results.values())
     total_out = sum(r["output_tokens"] for r in results.values())
     total_cost = sum(r["cost_usd"] for r in results.values())
+    # B3: history gets each worker's COMPACT summary, not its raw output —
+    # the full transcript lives in the events table. Falls back to a
+    # truncated excerpt for results that carry no summary (legacy shapes).
     combined_text = "\n\n".join(
-        f"[{r['agent_id']}]\n{r['text_output']}"
+        f"[{r['agent_id']}]\n{r.get('summary') or r['text_output'][:1200]}"
         for r in results.values()
-        if r["text_output"]
+        if r.get("summary") or r["text_output"]
     )
     all_failed = len(report.failed_agents) > 0 and len(report.merged) == 0
     turn_status = "failed" if all_failed else "completed"
@@ -747,6 +750,29 @@ async def _ensure_worktree_identity(worktree_path: str) -> None:
         await proc.communicate()
 
 
+async def _summarize_worker_run(
+    events: list, session_id: str, agent: SpawnedAgent, prompt: str
+):
+    """One Haiku call collapsing a worker's event stream (B3).
+
+    Isolated so tests can patch it; production path builds a session-scoped
+    HaikuCaller (budgeted, cost-logged) over the summarizer runner.
+    """
+    from backend.llm.haiku import HaikuCaller
+    from backend.summarizer.runner import summarize_events
+
+    caller = HaikuCaller(
+        worker=ClaudeCLIWorker(),
+        session_id=session_id,
+        agent_id_prefix=f"summarizer-{agent.agent_id}",
+    )
+    return await summarize_events(
+        events,
+        haiku_caller=caller,
+        task_description=agent.subtask or prompt[:300],
+    )
+
+
 async def _execute_worker(
     agent: SpawnedAgent,
     prompt: str,
@@ -819,6 +845,7 @@ async def _execute_worker(
 
     text_parts: list[str] = []
     final_text: str | None = None    # populated when TEXT_DONE arrives
+    collected_events: list = []      # B3: fed to the Haiku summarizer post-run
     result = AgentResult(
         agent_id=agent.agent_id, status="completed", text_output="",
         input_tokens=0, output_tokens=0, cost_usd=0.0, error=None,
@@ -826,6 +853,7 @@ async def _execute_worker(
 
     try:
         async for event in worker.run(prompt, config):
+            collected_events.append(event)
             try:
                 await write_event(event)
             except Exception as exc:
@@ -885,6 +913,74 @@ async def _execute_worker(
     result["text_output"] = final_text if final_text is not None else "".join(text_parts)
     await _auto_commit_worktree(agent.worktree_path, agent.agent_id)
     final_status = result["status"]
+
+    # B3: collapse the run into a compact Haiku summary. The full transcript
+    # is already persisted in the events table; only the summary enters the
+    # orchestrator's conversation history. Degrades to a truncated raw
+    # excerpt if the summarizer errors — a summarizer outage must never
+    # fail the turn.
+    completion_report = None
+    result["summary"] = ""
+    if collected_events and agent.model.startswith("claude:"):
+        try:
+            tiered = await _summarize_worker_run(
+                collected_events, session_id, agent, prompt,
+            )
+            result["summary"] = tiered.standard or tiered.tldr
+            completion_report = tiered.detailed
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Summarizer failed for %s: %s", agent.agent_id, exc)
+    if not result["summary"]:
+        raw = result["text_output"].strip()
+        result["summary"] = raw[:1200] + ("…" if len(raw) > 1200 else "")
+
+    # B4: deterministic validation — trust scores now mean "claims checked
+    # against the worktree's git state", not "process exited 0". Only the
+    # file validators run (TestRun/PackageInstall need evidence sources
+    # HIVE doesn't collect since the Phase A command-audit deletion).
+    result["validation_passed"] = None
+    result["validation_findings"] = []
+    if final_status == "completed" and completion_report is not None:
+        try:
+            from backend.validation.context import collect_git_context
+            from backend.validation.validators import (
+                FileCreationValidator,
+                FileDeletionValidator,
+                FileModificationValidator,
+                validate_report_async,
+            )
+
+            ctx = await collect_git_context(agent.worktree_path)
+            vres = await validate_report_async(
+                completion_report, ctx,
+                validators=[
+                    FileModificationValidator(),
+                    FileCreationValidator(),
+                    FileDeletionValidator(),
+                ],
+            )
+            result["validation_passed"] = vres.passed
+            result["validation_findings"] = [
+                f.detail for f in vres.findings if not f.ok
+            ]
+            if not vres.passed:
+                logger.warning(
+                    "Validation FAILED for %s: %s",
+                    agent.agent_id, result["validation_findings"],
+                )
+                await _emit_to_ws(session_id, {
+                    "type": "validation_failed",
+                    "session_id": session_id,
+                    "agent_id": agent.agent_id,
+                    "findings": result["validation_findings"],
+                })
+                result["summary"] += (
+                    "\n\n⚠ Validation failed: "
+                    + "; ".join(result["validation_findings"][:3])
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Validation errored for %s: %s", agent.agent_id, exc)
+
     await update_agent_status(agent.agent_id, final_status)
 
     # Section 6.2 — breaker bookkeeping.
@@ -893,12 +989,13 @@ async def _execute_worker(
     else:
         breaker.record_failure()
 
-    # Section 5.5 — trust score per worker model.
+    # Section 5.5 — trust score per worker model. "Passed" now requires the
+    # validators to agree, not just a clean exit; an unvalidated completion
+    # (no structured report available) counts as passed to avoid punishing
+    # chat-only roles that produce no file claims.
+    passed = final_status == "completed" and result["validation_passed"] is not False
     try:
-        await record_trust_completion(
-            breaker.worker_id,
-            passed_validation=(final_status == "completed"),
-        )
+        await record_trust_completion(breaker.worker_id, passed_validation=passed)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Trust record failed for %s: %s", breaker.worker_id, exc)
 

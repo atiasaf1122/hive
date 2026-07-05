@@ -242,7 +242,10 @@ async def test_execute_worker_injects_skill_context(tmp_path, monkeypatch):
     captured_config = {}
 
     async def _mock_run(prompt, config):
-        captured_config["system_prompt"] = config.system_prompt
+        # B3 note: the same mocked worker also serves the post-run Haiku
+        # summarizer call — only the FIRST call is the actual agent run,
+        # so capture once (the summarizer's config has no skill context).
+        captured_config.setdefault("system_prompt", config.system_prompt)
         yield HiveEvent(type=EventType.AGENT_START, agent_id="ag1", session_id="sess-skill")
         yield HiveEvent(type=EventType.TEXT_DELTA, agent_id="ag1", session_id="sess-skill", text="done")
         yield HiveEvent(type=EventType.AGENT_END, agent_id="ag1", session_id="sess-skill")
