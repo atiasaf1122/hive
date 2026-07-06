@@ -70,8 +70,9 @@ Rules:
   they would, merge them into one agent, sequence the work across turns, or make one a reviewer
   of the other's output. Overlapping hints are enforced mechanically: same-role overlaps get
   merged into one agent, different-role overlaps get sequenced — plan disjoint to stay parallel.
-- `max_turns`: per-agent budget — 5-8 for small/mechanical subtasks, 15 standard, 25 only for
-  large builds.
+- `max_turns`: per-agent budget — every tool call costs a turn, so even a one-line edit takes
+  ~6-8 turns (read, edit, verify, respond). 10-12 for small/mechanical subtasks, 15-20 standard,
+  30 only for large builds.
 - passive=true for Debugger only.
 - No markdown, no extra text outside the JSON.
 
@@ -201,13 +202,15 @@ async def orchestrate(
         session_id=session_id,
         model=model,
         worktree_path=cwd,
-        # `max_turns=1` means: produce the decision in a single
-        # response. Higher values give Claude room to chain tool calls
-        # — but the planner's job is to DECIDE, not investigate. In
-        # dogfooding it ran 4× WebSearch + a Bash and blew the 3-turn
-        # budget without ever returning the JSON, dropping us into
-        # fallback-team-with-approval-gate hell.
-        max_turns=1,
+        # E0.3 finding: claude CLI counts EVERY tool iteration as a turn,
+        # so max_turns=1 + allowed tools meant the first Read killed the
+        # planner (error_max_turns at num_turns=2 — observed in the D e2e
+        # and every E0 run where it glanced at a file; only the D2 gate's
+        # revision loop kept those sessions alive). 6 turns = a few
+        # Read/Glob/Grep calls then the decision. The original fear
+        # (planner burning turns on WebSearch research) is already solved
+        # by the allowed_tools whitelist below, not by the turn cap.
+        max_turns=6,
         # No WebSearch / WebFetch / Bash here — those are research
         # tools the planner doesn't need. Inspecting the local project
         # tree (Read/Glob/Grep) is enough to choose a team. If
@@ -353,7 +356,11 @@ def _parse_composition_dict(data: dict) -> TeamComposition:
         if files_hint is not None:
             files_hint = [str(f) for f in files_hint if str(f).strip()] or None
         raw_turns = member.get("max_turns")
-        max_turns = max(1, min(int(raw_turns), 50)) if raw_turns else None
+        # Floor of 10 (E0.3): claude CLI counts every tool iteration as a
+        # turn — the golden tiny-fix builder starved at a plan-assigned 6
+        # (read+edit+verify+respond already needs ~6-8). Planner budgets
+        # below a working minimum are optimism, not economy.
+        max_turns = max(10, min(int(raw_turns), 50)) if raw_turns else None
 
         # C3: validate MCP server ids against the catalog — an unknown id
         # is dropped with a warning rather than failing the whole plan.

@@ -1,0 +1,22 @@
+{
+  "timestamp": "20260706-172530",
+  "results": [
+    {
+      "name": "tiny-fix",
+      "success": false,
+      "failures": [
+        "file_contains: '\"hello\"' not in greet.py",
+        "command_succeeds: `python3 -c \"from greet import greet; assert greet() == 'hello'\"` exited 1: Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n    from greet import greet; assert greet() == 'hello'\n                                    ^^^^^^^^^^^^^^^^^^\nAssertionError\n"
+      ],
+      "wall_seconds": 44.4,
+      "cost_usd": 0.0598,
+      "input_tokens": 62,
+      "output_tokens": 2170,
+      "agents_spawned": 1,
+      "session_id": "g33406a6"
+    }
+  ],
+  "total_cost_usd": 0.0598,
+  "passed": 0,
+  "total": 1
+}

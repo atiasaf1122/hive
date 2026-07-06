@@ -69,13 +69,19 @@ class WorktreeManager:
 
         await self._ensure_local_identity()
 
-        # Need at least one commit for worktrees to work.
+        # Need at least one commit for worktrees to work. Commit whatever
+        # already exists — an EMPTY initial commit (the old behavior) left
+        # pre-existing project files untracked forever, so the first agent
+        # to commit one of them could never merge back ("untracked working
+        # tree files would be overwritten"), and every such session paid an
+        # Opus review for a phantom conflict (E0.3 golden finding).
         try:
             await _run("git", "rev-parse", "HEAD", cwd=self.project_path)
         except RuntimeError:
+            await _run("git", "add", "-A", cwd=self.project_path)
             await _run(
                 "git", "commit", "--allow-empty",
-                "-m", "chore: init repo for HIVE",
+                "-m", "chore: init repo for HIVE (adopting existing files)",
                 cwd=self.project_path,
             )
 
@@ -168,9 +174,16 @@ class WorktreeManager:
         except RuntimeError as exc:
             error_msg = str(exc)
             if "CONFLICT" in error_msg or "conflict" in error_msg.lower():
-                # Abort the merge — Reviewer will handle resolution
-                await _run("git", "merge", "--abort", cwd=self.project_path)
+                # Read the conflicted paths BEFORE aborting — after the
+                # abort the index is clean and the list is always empty
+                # (E0.3 finding: every llm_review ran with files=[]).
                 conflicts = await _get_conflict_files(self.project_path)
+                try:
+                    await _run("git", "merge", "--abort", cwd=self.project_path)
+                except RuntimeError:
+                    # Nothing to abort — the merge never started (e.g. a
+                    # pre-merge checkout refusal). The worktree is clean.
+                    pass
                 return MergeResult(
                     success=False,
                     agent_id=agent_id,

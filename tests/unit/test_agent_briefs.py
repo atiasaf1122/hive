@@ -50,6 +50,15 @@ def test_parser_clamps_max_turns() -> None:
     assert comp.team[0].max_turns == 50
 
 
+def test_parser_floors_max_turns() -> None:
+    """E0.3: a plan-assigned budget below a working minimum starves the
+    agent (tiny-fix builder died at 6 — every tool call costs a turn)."""
+    comp = _parse_composition_dict(_plan([
+        {"role": "Builder", "model": "claude:sonnet", "subtask": "x", "max_turns": 3},
+    ]))
+    assert comp.team[0].max_turns == 10
+
+
 def test_parser_defaults_when_briefs_absent() -> None:
     comp = _parse_composition_dict(_plan([{"role": "Builder", "model": "claude:sonnet"}]))
     assert comp.team[0].subtask == ""
