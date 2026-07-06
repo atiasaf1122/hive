@@ -36,6 +36,9 @@ class EventType(StrEnum):
     SALVAGE_REVIEW = "salvage/review"
     # F4: parse-time wave resequencing of a produce/consume dependency.
     PLAN_ADJUSTED = "plan/adjusted"
+    # G1: keyword scan disagreed with the classifier's needs_tools verdict
+    # (measured, not silently overridden — we route by the safer answer).
+    CLASSIFIER_DISAGREEMENT = "classifier/disagreement"
 
     # Content
     TEXT_DELTA = "text/delta"

@@ -21,14 +21,70 @@ from backend.orchestrator.task_router import (
 
 def test_parse_accepts_thinking_wrapped_json() -> None:
     raw = ('<think>hmm</think>{"shape": "solo", "role": "editor", '
-           '"mechanical": true, "reason": "one-file typo fix"}')
+           '"mechanical": true, "needs_tools": false, "reason": "one-file typo fix"}')
     d = _parse(raw, engine="local:qwen3:8b")
     assert d.shape == "solo" and d.role == "Editor" and d.mechanical
+    assert d.needs_tools is False
+
+
+def test_parse_reads_needs_tools_field() -> None:
+    d = _parse('{"shape": "solo", "needs_tools": true, "reason": "browser"}', "e")
+    assert d.needs_tools is True
+    # absent → defaults false
+    d2 = _parse('{"shape": "solo", "reason": "x"}', "e")
+    assert d2.needs_tools is False
 
 
 def test_parse_rejects_garbage_and_bad_shape() -> None:
     assert _parse("not json at all", "e") is None
     assert _parse('{"shape": "fleet"}', "e") is None
+
+
+@pytest.mark.asyncio
+async def test_tools_backstop_logs_disagreement_and_routes_safe() -> None:
+    """G1: keywords scream tools but classifier said false → log
+    CLASSIFIER_DISAGREEMENT, route by the safer verdict (needs_tools=True)."""
+    from backend.orchestrator import task_router as tr
+
+    reply = json.dumps({"shape": "solo", "role": "Builder", "mechanical": True,
+                        "needs_tools": False, "reason": "just build the page"})
+    events: list = []
+
+    async def cap(ev, **kw):
+        events.append(ev)
+
+    with patch("backend.models_local.discover_local_models",
+               new=AsyncMock(return_value=[])), \
+         patch("backend.orchestrator.task_router._haiku",
+               new=AsyncMock(return_value=reply)), \
+         patch("backend.persistence.events.write_event", cap):
+        d = await tr.resolve_task_shape(
+            "Build the page and take a screenshot with Playwright", "auto",
+            session_id="s1")
+
+    assert d.needs_tools is True          # routed safe despite classifier=false
+    assert any(str(e.type) == "classifier/disagreement" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_tools_backstop_silent_when_classifier_agrees() -> None:
+    from backend.orchestrator import task_router as tr
+
+    reply = json.dumps({"shape": "solo", "needs_tools": True, "reason": "browser"})
+    events: list = []
+
+    async def cap(ev, **kw):
+        events.append(ev)
+
+    with patch("backend.models_local.discover_local_models",
+               new=AsyncMock(return_value=[])), \
+         patch("backend.orchestrator.task_router._haiku",
+               new=AsyncMock(return_value=reply)), \
+         patch("backend.persistence.events.write_event", cap):
+        d = await tr.resolve_task_shape("verify with Playwright", "auto", "s1")
+
+    assert d.needs_tools is True
+    assert not any(str(e.type) == "classifier/disagreement" for e in events)
 
 
 @pytest.mark.asyncio
@@ -94,18 +150,39 @@ async def test_solo_mechanical_routes_local_coder() -> None:
 
 
 @pytest.mark.asyncio
-async def test_solo_browser_task_stays_on_claude_not_local() -> None:
-    """F5: a mechanical solo that needs a real browser must NOT route local
-    (local workers can't drive tools) — E3's MCP-stays-on-Claude rule."""
+async def test_needs_tools_solo_stays_on_claude_and_gets_browser_mcp() -> None:
+    """G1: needs_tools=True routes by FIELD (not keyword) — never local, and
+    a browser-shaped task attaches the playwright MCP."""
     pool = [LocalModel("qwen3-coder:30b", 18.6, frozenset({"coding"}), "t",
                        estimate_vram_mb(18.6), available=True)]
     decision = ShapeDecision(shape="solo", reasoning="verify in browser",
-                             engine="x", role="Builder", mechanical=True)
+                             engine="x", role="Builder", mechanical=True,
+                             needs_tools=True)
     with patch("backend.models_local.discover_local_models",
                new=AsyncMock(return_value=pool)):
         comp = await build_solo_composition(
             "Build index.html and verify it with Playwright, save a screenshot", decision)
-    assert comp.team[0].model.startswith("claude:")   # NOT ollama
+    assert comp.team[0].model.startswith("claude:")     # NOT ollama
+    assert comp.team[0].mcp_servers == ["playwright"]
+    assert comp.team[0].max_turns == 28
+
+
+@pytest.mark.asyncio
+async def test_needs_tools_false_mechanical_still_routes_local() -> None:
+    """A multi-file edit with needs_tools=false is fine on the local coder —
+    the F5 keyword band-aid would have mis-flagged 'e2e' in prose; the field
+    is authoritative."""
+    pool = [LocalModel("qwen3-coder:30b", 18.6, frozenset({"coding"}), "t",
+                       estimate_vram_mb(18.6), available=True)]
+    decision = ShapeDecision(shape="solo", reasoning="rename across files",
+                             engine="x", role="Builder", mechanical=True,
+                             needs_tools=False)
+    with patch("backend.models_local.discover_local_models",
+               new=AsyncMock(return_value=pool)):
+        comp = await build_solo_composition(
+            "rename the module and update all imports", decision)
+    assert comp.team[0].model == "ollama:qwen3-coder:30b"
+    assert comp.team[0].mcp_servers == []
 
 
 @pytest.mark.asyncio

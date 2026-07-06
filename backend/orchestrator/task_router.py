@@ -34,7 +34,7 @@ VALID_SHAPES = ("solo", "swarm", "chat")
 _SOLO_ROLES = ("Builder", "Writer", "Editor", "Researcher")
 
 _RUBRIC = """Classify a user request for an AI coding-agent system. Reply with ONE JSON object, nothing else:
-{{"shape": "solo" | "swarm" | "chat", "role": "Builder|Writer|Editor|Researcher", "mechanical": true/false, "reason": "one short line"}}
+{{"shape": "solo" | "swarm" | "chat", "role": "Builder|Writer|Editor|Researcher", "mechanical": true/false, "needs_tools": true/false, "reason": "one short line"}}
 
 - "chat": a question, discussion, opinion, or explanation — NO file changes requested.
 - "solo": ONE focused change with clear scope (one file/concern): fix a typo, rename X,
@@ -45,6 +45,11 @@ _RUBRIC = """Classify a user request for an AI coding-agent system. Reply with O
   small text edits → Editor, look-something-up → Researcher).
 - "mechanical": for solo only — true when the change is fully specified by the request
   itself (no investigation of unfamiliar code needed).
+- "needs_tools": true when the task requires interaction BEYOND plain file editing —
+  driving a real browser (Playwright/Puppeteer/Selenium), taking a screenshot, running an
+  end-to-end/e2e check against a live app, web search/fetch, or any other MCP tool. false
+  when writing/editing/reading files (even many of them) is enough. When unsure, answer
+  true — under-equipping a tool task fails silently.
 
 Request:
 ---
@@ -65,6 +70,10 @@ class ShapeDecision:
     engine: str                   # what classified: local:<model> | claude:haiku | override | fallback
     role: str = "Builder"
     mechanical: bool = False
+    # G1: does the task need browser/MCP/tool interaction beyond file edits?
+    # A first-class judgment — needs_tools=True never routes to a local
+    # worker (local has no tool loop). True is the safe default.
+    needs_tools: bool = False
 
 
 async def resolve_task_shape(
@@ -85,22 +94,54 @@ async def resolve_task_shape(
         # classifier still supplies role/mechanical for model choice.
         try:
             classified = await _classify(message, session_id)
-            return ShapeDecision(shape=override,
-                                 reasoning=f"user override ({classified.reasoning})",
-                                 engine="override",
-                                 role=classified.role,
-                                 mechanical=classified.mechanical)
+            decision = ShapeDecision(shape=override,
+                                     reasoning=f"user override ({classified.reasoning})",
+                                     engine="override",
+                                     role=classified.role,
+                                     mechanical=classified.mechanical,
+                                     needs_tools=classified.needs_tools)
+            return await _apply_tools_backstop(decision, message, session_id)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Classifier failed under override (%s) — defaults", exc)
             return ShapeDecision(shape=override, reasoning="user override",
                                  engine="override")
     try:
-        return await _classify(message, session_id)
+        decision = await _classify(message, session_id)
     except Exception as exc:  # noqa: BLE001 — router must never break a turn
         logger.warning("Task-shape classifier failed (%s) — defaulting to swarm", exc)
         return ShapeDecision(shape="swarm",
                              reasoning=f"classifier unavailable: {exc}",
                              engine="fallback")
+    return await _apply_tools_backstop(decision, message, session_id)
+
+
+async def _apply_tools_backstop(
+    decision: ShapeDecision, message: str, session_id: str,
+) -> ShapeDecision:
+    """G1: the F5 keyword scan is now only a VALIDATION backstop on the
+    classifier's needs_tools judgment. If keywords scream tools but the 8B
+    said needs_tools=false, don't override silently — log a
+    CLASSIFIER_DISAGREEMENT event (we want to measure the 8B's judgment) and
+    route by the SAFER verdict (tools=true → Claude)."""
+    keyword_tools = bool(_TOOL_RELIANT_RE.search(message))
+    if keyword_tools and not decision.needs_tools:
+        logger.info("Classifier said needs_tools=false but keywords disagree — "
+                    "routing safe (tools)")
+        if session_id:
+            try:
+                from backend.persistence.events import write_event
+                from backend.workers.base import EventType, HiveEvent
+                await write_event(HiveEvent(
+                    type=EventType.CLASSIFIER_DISAGREEMENT,
+                    agent_id="task-shape", session_id=session_id,
+                    raw_payload={"classifier_needs_tools": False,
+                                 "keyword_needs_tools": True,
+                                 "shape": decision.shape,
+                                 "reasoning": decision.reasoning}))
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Disagreement event write failed: %s", exc)
+        decision.needs_tools = True     # route by the safer verdict
+    return decision
 
 
 async def _classify(message: str, session_id: str = "") -> ShapeDecision:
@@ -197,6 +238,7 @@ def _parse(raw: str, engine: str) -> ShapeDecision | None:
         engine=engine,
         role=role,
         mechanical=bool(data.get("mechanical", False)),
+        needs_tools=bool(data.get("needs_tools", False)),
     )
 
 
@@ -214,19 +256,28 @@ _TOOL_RELIANT_RE = re.compile(
     re.IGNORECASE)
 
 
+# Browser-shaped tasks get the playwright MCP; other tool needs
+# (web search etc.) are handled by the CLI's built-in tools on a Claude
+# tier — only browser drive needs a server attached.
+_BROWSER_RE = re.compile(
+    r"\b(playwright|puppeteer|selenium|browser|screenshot|headless|"
+    r"chromium|webdriver|navigate to|click the)\b", re.IGNORECASE)
+
+
 async def build_solo_composition(message: str, decision: ShapeDecision):
     """One-agent team from the request itself — no planner call.
 
-    Model choice follows the E2 routing guidance: a mechanical, fully
-    specified change goes to the local coder when one is available
-    (fallback haiku); anything else gets claude:sonnet.
+    G1 routing: needs_tools (a first-class classifier field, backstopped by
+    the keyword scan) → never a local worker; browser-shaped → attach the
+    playwright MCP. Otherwise a mechanical, fully-specified change goes to
+    the local coder when available (fallback haiku); anything else sonnet.
     """
     from backend.models_local import best_local_for, discover_local_models
     from backend.orchestrator.nodes.planner import TeamComposition, TeamMember
 
+    needs_tools = decision.needs_tools
     model = "claude:sonnet"
-    tool_reliant = bool(_TOOL_RELIANT_RE.search(message))
-    if decision.mechanical and not tool_reliant:
+    if decision.mechanical and not needs_tools:
         model = "claude:haiku"
         try:
             pool = await discover_local_models()
@@ -236,13 +287,16 @@ async def build_solo_composition(message: str, decision: ShapeDecision):
         except Exception:  # noqa: BLE001
             pass
 
-    # F5: a browser/tool-reliant solo burns turns fast (install + drive +
-    # verify + screenshot) — 12 starved the palette solo at the finish
-    # line, same class as the E0.3 MCP-turn lesson. 28 for those.
-    max_turns = 28 if tool_reliant else 12
+    mcp_servers: list[str] = []
+    if needs_tools and _BROWSER_RE.search(message):
+        mcp_servers = ["playwright"]
+
+    # A tool-reliant solo burns turns fast (install + drive + verify +
+    # screenshot) — 12 starved the palette solo (E0.3 MCP-turn lesson).
+    max_turns = 28 if needs_tools else 12
     member = TeamMember(
         role=decision.role, model=model, subtask=message.strip(),
-        max_turns=max_turns, fallback="haiku",
+        max_turns=max_turns, fallback="haiku", mcp_servers=mcp_servers,
     )
     return TeamComposition(
         team=[member], confidence=0.9,
