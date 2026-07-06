@@ -474,6 +474,7 @@ async def run_workers_node(state: GraphState) -> dict:
             )
             lessons = await retrieve_lessons(
                 f"{agent.role}: {agent.subtask or pending}",
+                task=state.get("task") or pending,
                 project_path=state.get("project_path"),
             )
             if lessons:

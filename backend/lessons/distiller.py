@@ -69,6 +69,13 @@ not determinable from the evidence alone, output: NONE: <one short line saying
 what is missing from the evidence>
 (NONE is a common, correct answer — never guess.)
 
+One deliberate exception to the strictness (E0.1.3 decision): a RESOLVED
+merge conflict counts as a failure worth learning from when the evidence
+names what collided (file(s), or the two sides' intents). The conflict
+itself is the pitfall — concurrent/overlapping edits to the same file.
+State the pitfall plus ONE practical avoidance that follows directly from
+it; do not pile on extra recommendations the evidence doesn't motivate.
+
 If (and only if) the evidence supports a lesson, return ONE JSON object:
 {{
   "title": "concise pitfall name (max 8 words)",
@@ -92,7 +99,11 @@ Drafted lesson:
   trigger_context: {trigger_context}
 
 Score 0-10 where 10 = every claim is explicitly evidenced and 0 = invented.
-Deduct heavily for any causal claim the evidence does not state outright.
+Deduct heavily for any FACTUAL or causal claim about what happened that the
+evidence does not state outright. The lesson's forward-looking advice is
+allowed to generalize from the evidenced failure mechanism — do NOT deduct
+for a recommendation that directly addresses the evidenced pitfall (E0.1.3
+decision); DO deduct for advice aimed at anything the evidence never showed.
 Return ONE JSON object: {{"score": <0-10>, "reason": "one line"}} — nothing else."""
 
 

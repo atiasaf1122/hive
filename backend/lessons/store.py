@@ -13,9 +13,15 @@ from backend.skills.embedder import cosine_similarity, deserialize, embed, seria
 
 logger = logging.getLogger(__name__)
 
-# HIGH similarity bar — err toward injecting NOTHING. Superficially similar
+# Similarity bar — err toward injecting NOTHING. Superficially similar
 # lessons anchor agents on wrong fixes; unsafe injection is worse than none.
-RETRIEVAL_THRESHOLD = 0.55
+# E0.1.3 measurement (all-MiniLM, real lesson + realistic queries): the
+# original 0.55 was unreachable in practice — a genuinely-similar task view
+# scores ~0.37-0.60 while UNRELATED tasks land ≤0.15 (worst observed 0.30
+# for git-adjacent wording, where the lesson is legitimately relevant).
+# 0.35 with max-over-views keeps a real margin against unrelated injection
+# while making the learning loop actually able to close.
+RETRIEVAL_THRESHOLD = 0.35
 MAX_LESSONS_PER_BRIEF = 3
 # Archive after this many injections where the warned-about failure
 # happened anyway.
@@ -129,11 +135,17 @@ async def retrieve_lessons(
     query: str,
     *,
     project_path: str | None,
+    task: str | None = None,
     top_k: int = MAX_LESSONS_PER_BRIEF,
     threshold: float = RETRIEVAL_THRESHOLD,
     db_path: Path = DB_PATH,
 ) -> list[Lesson]:
-    """Semantic match with a HIGH bar. Empty result is normal and correct."""
+    """Semantic match with a high bar. Empty result is normal and correct.
+
+    Similarity is the MAX over separate views (agent subtask, session task)
+    rather than one concatenated embedding — E0.1.3 measured that a
+    composite query dilutes both signals below usefulness (similar 0.376
+    vs unrelated 0.325), while per-view scores separate cleanly."""
     async with get_conn(db_path) as conn:
         cursor = await conn.execute(
             "SELECT * FROM lessons WHERE status='active' AND embedding IS NOT NULL")
@@ -141,11 +153,14 @@ async def retrieve_lessons(
     if not rows:
         return []
 
-    query_vec = embed(query)
+    view_vecs = [embed(query)]
+    if task and task.strip() and task.strip() != query.strip():
+        view_vecs.append(embed(task))
     now = datetime.utcnow()
     scored: list[tuple[float, Lesson]] = []
     for row in rows:
-        sim = cosine_similarity(query_vec, deserialize(row["embedding"]))
+        lesson_vec = deserialize(row["embedding"])
+        sim = max(cosine_similarity(v, lesson_vec) for v in view_vecs)
         if sim < threshold:
             continue
         lesson = _row_to_lesson(row)
