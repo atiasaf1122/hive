@@ -273,6 +273,43 @@ async def test_llm_review_runs_opus_and_returns_notes() -> None:
     assert notes and "Merged a1" in notes[0]
 
 
+@pytest.mark.asyncio
+async def test_llm_review_cost_lands_in_cost_log() -> None:
+    """E0.2 — the Opus review call must not vanish from cost accounting."""
+    from backend.orchestrator.nodes import reviewer as rmod
+    from backend.orchestrator.nodes.spawner import SpawnPlan
+    from backend.worktrees.manager import MergeResult
+
+    class _CostingWorker:
+        def __init__(self, *a, **kw): ...
+
+        async def run(self, prompt, config):
+            yield HiveEvent(type=EventType.COST, agent_id=config.agent_id,
+                            session_id=config.session_id,
+                            input_tokens=12, output_tokens=345, cost_usd=0.21)
+            yield HiveEvent(type=EventType.TEXT_DONE, agent_id=config.agent_id,
+                            session_id=config.session_id, text="resolved.")
+
+        async def kill(self, agent_id): ...
+
+    costs: list[tuple] = []
+
+    async def fake_write_cost(session_id, agent_id, tin, tout, cost, **kw):
+        costs.append((session_id, agent_id, tin, tout, cost))
+
+    plan = SpawnPlan(session_id="s", project_path="/tmp/p")
+    report = _fake_report([MergeResult(success=False, agent_id="a1",
+                                       branch="hive/s/a1", commits_merged=0,
+                                       conflict_files=["app.py"])])
+    with patch.object(rmod, "ClaudeCLIWorker", _CostingWorker, create=True), \
+         patch("backend.workers.claude_cli.ClaudeCLIWorker", _CostingWorker), \
+         patch("backend.persistence.events.write_cost", fake_write_cost):
+        notes = await rmod.llm_review(plan, report, {})
+
+    assert notes and "resolved" in notes[0]
+    assert costs == [("s", "llm-review-s", 12, 345, 0.21)]
+
+
 # ── collect_git_context against real repos (regression: master-named repos) ─
 
 

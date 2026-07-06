@@ -151,13 +151,15 @@ async def llm_review(
     prompt = "\n\n".join(parts)
 
     config = WorkerConfig(
-        agent_id=f"reviewer-{plan.session_id}",
+        agent_id=f"llm-review-{plan.session_id}",
         session_id=plan.session_id,
         model=model,
         worktree_path=plan.project_path,
         max_turns=max_turns,
     )
     try:
+        from backend.persistence.events import write_cost
+
         worker = ClaudeCLIWorker()
         text_parts: list[str] = []
         final_text: str | None = None
@@ -166,6 +168,16 @@ async def llm_review(
                 text_parts.append(event.text)
             elif event.type == EventType.TEXT_DONE and event.text:
                 final_text = event.text
+            elif event.type == EventType.COST:
+                # E0.2 — the Opus review call was invisible to cost
+                # accounting (Phase D flag); log it like any worker.
+                try:
+                    await write_cost(plan.session_id, config.agent_id,
+                                     event.input_tokens or 0,
+                                     event.output_tokens or 0,
+                                     event.cost_usd or 0.0)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("LLM review cost write failed: %s", exc)
             elif event.type == EventType.AGENT_ERROR:
                 logger.warning("LLM review errored: %s", event.error)
                 return [f"LLM review failed: {event.error}"]
