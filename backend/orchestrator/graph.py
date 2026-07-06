@@ -489,6 +489,12 @@ def _build_agent_prompt(agent: SpawnedAgent, goal: str, pending: str) -> str:
     if pending and pending.strip() != goal.strip():
         parts.append(f"## Current request\n{pending}")
     parts.append(f"## Your subtask\n{agent.subtask or pending}")
+    if getattr(agent, "contract", ""):
+        # G3: the shared interface every teammate builds against — the same
+        # text is in the other agents' prompts, so match it EXACTLY.
+        parts.append(
+            "## Shared contract (BINDING — every teammate builds to this exact "
+            "interface; do NOT invent a different one)\n" + agent.contract)
     if agent.files_hint:
         parts.append("## Files in your scope\n" + "\n".join(f"- {f}" for f in agent.files_hint))
     if agent.predecessor_note:
@@ -1733,6 +1739,7 @@ def _agent_to_dict(a: SpawnedAgent) -> dict:
         "subtask": a.subtask, "files_hint": a.files_hint, "max_turns": a.max_turns,
         "mcp_servers": a.mcp_servers,
         "wave": a.wave, "predecessor_note": a.predecessor_note,
+        "contract": getattr(a, "contract", ""),
     }
 
 
@@ -1746,4 +1753,5 @@ def _dict_to_agent(d: dict) -> SpawnedAgent:
         mcp_servers=d.get("mcp_servers") or [],
         wave=int(d.get("wave") or 0),
         predecessor_note=d.get("predecessor_note") or "",
+        contract=d.get("contract") or "",
     )

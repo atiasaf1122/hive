@@ -55,6 +55,7 @@ Return this exact JSON structure:
       "passive": false
     }
   ],
+  "contract": "GET /todos -> 200 [{id:int, task:str, done:bool}]; POST /todos body {task:str} -> 201 {id,task,done}; DELETE /todos/<id> -> 200 | 404",
   "confidence": 0.8,
   "rationale": "one line reason"
 }
@@ -79,6 +80,13 @@ Rules:
   30 only for large builds. MCP-equipped agents (browser etc.) burn turns fast — give them 25-30
   (the golden palette Tester died at the finish line on turns and its work was lost).
 - passive=true for Debugger only.
+- `contract` (optional, top-level): when the team has a producer/consumer pair around a shared
+  INTERFACE — API routes, function signatures, file formats, data shapes — state that interface
+  CONCRETELY here (routes + methods + status codes + payload shapes, or exact signatures, or the
+  file schema). It is injected verbatim into EVERY agent's prompt so the Builder and the Tester
+  build against the SAME stated contract instead of each guessing — a mismatch here is the
+  classic "tests assert a different API than the code implements" failure. Omit when there is no
+  shared interface (single agent, or independent files).
 - No markdown, no extra text outside the JSON.
 
 MCP servers (optional per-agent field `"mcp_servers": ["id", ...]`):
@@ -122,6 +130,7 @@ class TeamMember:
         wave: int = 0,
         predecessor_note: str = "",
         fallback: str = "haiku",
+        contract: str = "",
     ) -> None:
         self.role = role
         self.model = model
@@ -131,6 +140,8 @@ class TeamMember:
         self.files_hint = files_hint
         self.max_turns = max_turns
         self.mcp_servers = mcp_servers or []
+        # G3: shared interface contract injected into every teammate's prompt.
+        self.contract = contract
         # E2: Claude tier used when a local model can't spawn (VRAM full).
         self.fallback = fallback
         # D4: execution wave — wave>0 runs after all lower waves complete
@@ -409,6 +420,11 @@ def _parse_composition_dict(data: dict) -> TeamComposition:
     Legacy `count` fields (old checkpoints, pre-B1 plans) are expanded into
     individual members here so downstream code never sees count>1.
     """
+    # G3: contract-first — a concrete shared interface injected into EVERY
+    # brief so producer and consumer build against the SAME spec (the
+    # flask-todo failure was the Tester asserting a different API than the
+    # Builder implemented).
+    contract = str(data.get("contract") or "").strip()
     team = []
     for member in data.get("team", []):
         role = member.get("role", "Builder")
@@ -450,6 +466,7 @@ def _parse_composition_dict(data: dict) -> TeamComposition:
                 role=role, model=model, count=1, passive=passive,
                 subtask=subtask, files_hint=files_hint, max_turns=max_turns,
                 mcp_servers=list(mcp_servers), fallback=fallback,
+                contract=contract,
             ))
 
     adjustments = _resolve_file_overlaps(team)

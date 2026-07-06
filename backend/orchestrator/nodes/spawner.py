@@ -39,6 +39,8 @@ class SpawnedAgent:
     predecessor_note: str = ""
     # E2: Claude tier used when a local model can't spawn (VRAM full).
     fallback: str = "haiku"
+    # G3: shared interface contract, injected into the agent's prompt.
+    contract: str = ""
 
 
 @dataclass
@@ -131,6 +133,7 @@ async def spawn_agents(
             wave=int(getattr(member, "wave", 0) or 0),
             predecessor_note=str(getattr(member, "predecessor_note", "") or ""),
             fallback=str(getattr(member, "fallback", "haiku") or "haiku"),
+            contract=str(getattr(member, "contract", "") or ""),
         )
 
     results = await asyncio.gather(*[_create_one(m, i) for m, i in all_members])
