@@ -99,3 +99,79 @@ async def aggregate_cost_summary(
 async def cost_summary_endpoint(days: int = 7) -> CostSummary:
     """Cost dashboard data — totals, top 5 sessions, daily breakdown."""
     return await aggregate_cost_summary(days=days)
+
+
+# ── F0.2: per-session breakdown by role ──────────────────────────────────────
+
+class RoleCost(BaseModel):
+    role: str
+    cost_usd: float
+    input_tokens: int
+    output_tokens: int
+    calls: int
+    local: bool
+
+
+class SessionCostBreakdown(BaseModel):
+    session_id: str
+    total_usd: float
+    saved_via_local_usd: float     # local tokens priced at Haiku ($1/$5 MTok)
+    by_role: list[RoleCost]
+
+
+# agent_id prefixes → role buckets. Order matters (first match wins);
+# everything unmatched is a worker.
+_ROLE_PREFIXES = [
+    ("planner-", "planner"),
+    ("plan-gate-", "plan gate"),
+    ("shape-classifier-", "task-shape classifier"),
+    ("chat-", "chat"),
+    ("summarizer-", "summarizer"),
+    ("lesson-distiller-", "lesson distiller"),
+    ("llm-review-", "llm review"),
+    ("meta-", "meta"),
+    ("compaction-", "compaction"),
+]
+
+
+def _role_of(agent_id: str) -> str:
+    for prefix, role in _ROLE_PREFIXES:
+        if agent_id.startswith(prefix):
+            return role
+    return "workers"
+
+
+@router.get("/session/{session_id}", response_model=SessionCostBreakdown)
+async def session_cost_breakdown(session_id: str) -> SessionCostBreakdown:
+    """One session's spend by role — data already in cost_log (F0.2)."""
+    async with get_conn(DB_PATH) as conn:
+        cur = await conn.execute(
+            "SELECT agent_id, input_tokens, output_tokens, cost_usd, local "
+            "FROM cost_log WHERE session_id=?", (session_id,))
+        rows = await cur.fetchall()
+
+    buckets: dict[tuple[str, bool], dict] = {}
+    saved = 0.0
+    for r in rows:
+        is_local = bool(r["local"])
+        key = (_role_of(r["agent_id"]), is_local)
+        b = buckets.setdefault(key, {"cost": 0.0, "itok": 0, "otok": 0, "n": 0})
+        b["cost"] += float(r["cost_usd"] or 0.0)
+        b["itok"] += int(r["input_tokens"] or 0)
+        b["otok"] += int(r["output_tokens"] or 0)
+        b["n"] += 1
+        if is_local:
+            saved += (r["input_tokens"] or 0) * 1.0 / 1e6 + (r["output_tokens"] or 0) * 5.0 / 1e6
+
+    by_role = [
+        RoleCost(role=role, local=is_local, cost_usd=round(b["cost"], 4),
+                 input_tokens=b["itok"], output_tokens=b["otok"], calls=b["n"])
+        for (role, is_local), b in sorted(
+            buckets.items(), key=lambda kv: -kv[1]["cost"])
+    ]
+    return SessionCostBreakdown(
+        session_id=session_id,
+        total_usd=round(sum(b.cost_usd for b in by_role), 4),
+        saved_via_local_usd=round(saved, 4),
+        by_role=by_role,
+    )

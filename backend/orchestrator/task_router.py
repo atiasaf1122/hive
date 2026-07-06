@@ -70,14 +70,32 @@ class ShapeDecision:
 async def resolve_task_shape(
     message: str,
     override: str = "auto",
+    session_id: str = "",
 ) -> ShapeDecision:
     """Explicit user choice wins; otherwise classify; failure → swarm."""
     override = (override or "auto").lower()
-    if override in VALID_SHAPES:
-        return ShapeDecision(shape=override, reasoning="user override",
+    if override == "chat":
+        # No attributes needed to answer in-session.
+        return ShapeDecision(shape="chat", reasoning="user override",
                              engine="override")
+    if override in VALID_SHAPES:
+        # F0.4 finding: the override used to skip classification entirely,
+        # so `mechanical` stayed False and an overridden Solo could never
+        # route to a local model. The override forces the SHAPE; the
+        # classifier still supplies role/mechanical for model choice.
+        try:
+            classified = await _classify(message, session_id)
+            return ShapeDecision(shape=override,
+                                 reasoning=f"user override ({classified.reasoning})",
+                                 engine="override",
+                                 role=classified.role,
+                                 mechanical=classified.mechanical)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Classifier failed under override (%s) — defaults", exc)
+            return ShapeDecision(shape=override, reasoning="user override",
+                                 engine="override")
     try:
-        return await _classify(message)
+        return await _classify(message, session_id)
     except Exception as exc:  # noqa: BLE001 — router must never break a turn
         logger.warning("Task-shape classifier failed (%s) — defaulting to swarm", exc)
         return ShapeDecision(shape="swarm",
@@ -85,18 +103,18 @@ async def resolve_task_shape(
                              engine="fallback")
 
 
-async def _classify(message: str) -> ShapeDecision:
+async def _classify(message: str, session_id: str = "") -> ShapeDecision:
     prompt = _RUBRIC.format(message=message[:4000])
 
     local = await _local_classifier_model()
     if local is not None:
-        raw = await _ollama_generate(prompt, local)
+        raw = await _ollama_generate(prompt, local, session_id=session_id)
         decision = _parse(raw, engine=f"local:{local}")
         if decision is not None:
             return decision
         logger.info("Local classifier gave no usable JSON — trying Haiku")
 
-    raw = await _haiku(prompt)
+    raw = await _haiku(prompt, session_id)
     decision = _parse(raw, engine="claude:haiku")
     if decision is not None:
         return decision
@@ -119,7 +137,8 @@ async def _local_classifier_model() -> str | None:
     return min(small, key=lambda m: m.size_gb).name if small else match.name
 
 
-async def _ollama_generate(prompt: str, model: str, timeout_s: float = 30.0) -> str:
+async def _ollama_generate(prompt: str, model: str, timeout_s: float = 30.0,
+                           session_id: str = "") -> str:
     from backend.detection import resolved_ollama_base
 
     async with httpx.AsyncClient(timeout=timeout_s) as client:
@@ -128,14 +147,28 @@ async def _ollama_generate(prompt: str, model: str, timeout_s: float = 30.0) -> 
             json={"model": model, "prompt": prompt, "stream": False},
         )
         resp.raise_for_status()
-        return str(resp.json().get("response") or "")
+        data = resp.json()
+        if session_id:
+            # F0.1: token counts at $0 — keep classifier context data.
+            try:
+                from backend.persistence.events import write_cost
+                await write_cost(session_id, f"shape-classifier-{session_id}",
+                                 int(data.get("prompt_eval_count") or 0),
+                                 int(data.get("eval_count") or 0), 0.0,
+                                 local=True)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Classifier cost write failed: %s", exc)
+        return str(data.get("response") or "")
 
 
-async def _haiku(prompt: str) -> str:
+async def _haiku(prompt: str, session_id: str = "") -> str:
     from backend.llm.haiku import HaikuCaller
     from backend.workers.claude_cli import ClaudeCLIWorker
 
-    caller = HaikuCaller(worker=ClaudeCLIWorker(), session_id="task-shape",
+    # F0.1: a real session_id makes the cost row land (the old hardcoded
+    # "task-shape" violated the sessions FK and the write silently failed).
+    caller = HaikuCaller(worker=ClaudeCLIWorker(),
+                         session_id=session_id or "task-shape",
                          agent_id_prefix="shape-classifier")
     return await caller(prompt) or ""
 
@@ -235,6 +268,15 @@ async def answer_chat(message: str, history: list[dict], session_id: str) -> str
             chunks.append(event.text)
         elif event.type == EventType.TEXT_DONE and event.text:
             final = event.text
+        elif event.type == EventType.COST:
+            try:
+                from backend.persistence.events import write_cost
+                await write_cost(session_id, config.agent_id,
+                                 event.input_tokens or 0,
+                                 event.output_tokens or 0,
+                                 event.cost_usd or 0.0)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Chat cost write failed: %s", exc)
         elif event.type == EventType.AGENT_ERROR:
             raise RuntimeError(event.error or "chat answer failed")
     return (final if final is not None else "".join(chunks)).strip()

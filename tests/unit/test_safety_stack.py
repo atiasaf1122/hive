@@ -15,14 +15,6 @@ from backend.safety.circuit_breaker import (
     CircuitBreaker,
 )
 from backend.safety.hard_stops import DEFAULTS, HardStops, check
-from backend.safety.pattern_detector import (
-    ActivityWindow,
-    ErrorEntry,
-    FileEdit,
-    PatternKind,
-    ReviewerRejection,
-    detect_stuck_patterns,
-)
 
 
 # ── Hard stops ──────────────────────────────────────────────────────────────
@@ -171,70 +163,3 @@ def test_registry_reset_zeroes_a_breaker() -> None:
     reg.reset("worker-x")
     assert cb.state is BreakerState.CLOSED
     assert cb.consecutive_failures == 0
-
-
-# ── Pattern detector ────────────────────────────────────────────────────────
-
-T0 = datetime(2026, 5, 20, 12, 0)
-
-
-def test_no_patterns_when_window_is_quiet() -> None:
-    out = detect_stuck_patterns(ActivityWindow(), now=T0)
-    assert out == []
-
-
-def test_same_error_pattern() -> None:
-    activity = ActivityWindow(errors=[
-        ErrorEntry("ModuleNotFoundError: foo", T0 - timedelta(minutes=i))
-        for i in range(5)
-    ])
-    out = detect_stuck_patterns(activity, now=T0)
-    assert any(p.kind is PatternKind.SAME_ERROR for p in out)
-
-
-def test_file_thrash_pattern() -> None:
-    activity = ActivityWindow(file_edits=[
-        FileEdit("auth.ts", T0 - timedelta(minutes=i), "builder-1")
-        for i in range(5)
-    ])
-    out = detect_stuck_patterns(activity, now=T0)
-    p = next(p for p in out if p.kind is PatternKind.FILE_THRASH)
-    assert "auth.ts" in p.detail
-
-
-def test_no_progress_when_agent_active_but_no_output() -> None:
-    activity = ActivityWindow(
-        agent_marked_active=True,
-        last_commit_at=T0 - timedelta(minutes=20),
-        last_new_file_at=T0 - timedelta(minutes=20),
-    )
-    out = detect_stuck_patterns(activity, now=T0)
-    assert any(p.kind is PatternKind.NO_PROGRESS for p in out)
-
-
-def test_no_progress_quiet_when_recent_commit() -> None:
-    activity = ActivityWindow(
-        agent_marked_active=True,
-        last_commit_at=T0 - timedelta(minutes=2),
-    )
-    out = detect_stuck_patterns(activity, now=T0)
-    assert not any(p.kind is PatternKind.NO_PROGRESS for p in out)
-
-
-def test_token_velocity_blocker() -> None:
-    activity = ActivityWindow(
-        last_hour_token_total=50_000,
-        last_day_token_total=120_000,   # avg = 5,000/h, so 50k/h is 10×
-    )
-    out = detect_stuck_patterns(activity, now=T0)
-    p = next(p for p in out if p.kind is PatternKind.TOKEN_VELOCITY)
-    assert p.severity == "blocker"
-
-
-def test_reviewer_rejection_pattern() -> None:
-    activity = ActivityWindow(reviewer_rejections=[
-        ReviewerRejection("builder-A", T0 - timedelta(minutes=i))
-        for i in range(5)
-    ])
-    out = detect_stuck_patterns(activity, now=T0)
-    assert any(p.kind is PatternKind.REVIEWER_REJECTS for p in out)

@@ -105,8 +105,9 @@ class _FakeResponse:
 
 
 class _FakeClient:
-    def __init__(self, payload=None, exc=None):
+    def __init__(self, payload=None, exc=None, ps_payload=None):
         self._payload, self._exc = payload, exc
+        self._ps = ps_payload if ps_payload is not None else {"models": []}
 
     async def __aenter__(self):
         return self
@@ -117,6 +118,8 @@ class _FakeClient:
     async def get(self, url):
         if self._exc:
             raise self._exc
+        if url.endswith("/api/ps"):
+            return _FakeResponse(self._ps)
         return _FakeResponse(self._payload)
 
 
@@ -142,6 +145,22 @@ async def test_discovery_available_with_free_vram() -> None:
         models = await discover_local_models(base_url="http://x:11434")
     assert all(m.available for m in models)
     assert {m.name for m in models} == {"qwen3-coder:30b", "qwen3:8b"}
+
+
+@pytest.mark.asyncio
+async def test_resident_model_available_despite_no_headroom() -> None:
+    """F0.4: a model already loaded in VRAM must not be double-counted —
+    its own residency was eating the headroom it was judged against."""
+    tight = _two_3090s(used0=24000, used1=20000)
+    ps = {"models": [{"name": "qwen3-coder:30b"}]}
+    with patch("backend.models_local.httpx.AsyncClient",
+               return_value=_FakeClient(_TAGS, ps_payload=ps)), \
+         patch("backend.resources.vram_manager.snapshot",
+               new=AsyncMock(return_value=tight)):
+        models = await discover_local_models(base_url="http://x:11434")
+    by_name = {m.name: m for m in models}
+    assert by_name["qwen3-coder:30b"].available and by_name["qwen3-coder:30b"].resident
+    assert not by_name["qwen3:8b"].available          # not resident, no headroom
 
 
 @pytest.mark.asyncio

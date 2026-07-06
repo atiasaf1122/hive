@@ -149,7 +149,8 @@ async def test_vram_full_falls_back_to_declared_tier(tmp_path) -> None:
         if ev.type == EventType.MODEL_FALLBACK:
             fallback_events.append(ev)
 
-    with patch.object(gmod, "_reserve_local_vram", new=AsyncMock(return_value=False)), \
+    with patch.object(gmod, "_reserve_local_vram",
+                      new=AsyncMock(return_value=(False, "insufficient VRAM headroom at spawn"))), \
          patch.object(gmod, "ClaudeCLIWorker", _FakeClaude), \
          patch.object(gmod, "write_event", fake_write_event), \
          patch.object(gmod, "_emit_to_ws", new=AsyncMock()), \
@@ -163,7 +164,78 @@ async def test_vram_full_falls_back_to_declared_tier(tmp_path) -> None:
     assert len(fallback_events) == 1
     payload = fallback_events[0].raw_payload
     assert payload["from"] == "ollama:qwen3-coder:30b" and payload["to"] == "claude:sonnet"
+    assert "VRAM" in payload["reason"]
     assert result["status"] == "completed"
+
+
+# ── F0.4: RAM pressure refuses local spawns (same fallback path) ────────────
+
+
+@pytest.mark.asyncio
+async def test_ram_pressure_refuses_local_spawn_with_reason() -> None:
+    from backend.orchestrator import graph as gmod
+    from backend.orchestrator.nodes.spawner import SpawnedAgent
+
+    agent = SpawnedAgent(agent_id="b-0", role="Builder",
+                         model="ollama:qwen3:8b", worktree_path="/tmp")
+
+    class _VM:
+        available = 1 * 2**30   # 1GB free < 4GB floor
+
+    with patch("psutil.virtual_memory", return_value=_VM()):
+        fits, reason = await gmod._reserve_local_vram(agent)
+    assert fits is False
+    assert reason.startswith("ram_pressure:")
+
+
+@pytest.mark.asyncio
+async def test_ram_ok_proceeds_to_vram_check() -> None:
+    from unittest.mock import AsyncMock as AM
+
+    from backend.models_local import LocalModel, estimate_vram_mb
+    from backend.orchestrator import graph as gmod
+    from backend.orchestrator.nodes.spawner import SpawnedAgent
+
+    agent = SpawnedAgent(agent_id="b-0", role="Builder",
+                         model="ollama:qwen3:8b", worktree_path="/tmp")
+    pool = [LocalModel("qwen3:8b", 5.2, frozenset({"coding"}), "t",
+                       estimate_vram_mb(5.2), available=True)]
+
+    class _VM:
+        available = 16 * 2**30
+
+    with patch("psutil.virtual_memory", return_value=_VM()), \
+         patch("backend.models_local.discover_local_models",
+               new=AM(return_value=pool)), \
+         patch("backend.resources.vram_manager.reserve",
+               new=AM(return_value=True)):
+        fits, reason = await gmod._reserve_local_vram(agent)
+    assert fits is True and reason == ""
+
+
+@pytest.mark.asyncio
+async def test_vram_full_reason_when_ram_ok() -> None:
+    from unittest.mock import AsyncMock as AM
+
+    from backend.models_local import LocalModel, estimate_vram_mb
+    from backend.orchestrator import graph as gmod
+    from backend.orchestrator.nodes.spawner import SpawnedAgent
+
+    agent = SpawnedAgent(agent_id="b-0", role="Builder",
+                         model="ollama:qwen3-coder:30b", worktree_path="/tmp")
+    pool = [LocalModel("qwen3-coder:30b", 18.6, frozenset({"coding"}), "t",
+                       estimate_vram_mb(18.6), available=True)]
+
+    class _VM:
+        available = 16 * 2**30
+
+    with patch("psutil.virtual_memory", return_value=_VM()), \
+         patch("backend.models_local.discover_local_models",
+               new=AM(return_value=pool)), \
+         patch("backend.resources.vram_manager.reserve",
+               new=AM(return_value=False)):
+        fits, reason = await gmod._reserve_local_vram(agent)
+    assert fits is False and "VRAM" in reason
 
 
 # ── planner digest gating ───────────────────────────────────────────────────

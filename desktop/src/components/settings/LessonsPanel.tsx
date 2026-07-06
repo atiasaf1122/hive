@@ -25,11 +25,22 @@ interface LessonRow {
   created_at: string
 }
 
+interface MetaNudge {
+  should_nudge: boolean
+  window_hours: number
+  clusters: { failure_class: string; count: number }[]
+}
+
 export function LessonsPanel() {
   const [lessons, setLessons] = useState<LessonRow[]>([])
   const [distillSession, setDistillSession] = useState('')
   const [metaRunning, setMetaRunning] = useState(false)
   const [metaReport, setMetaReport] = useState<string | null>(null)
+  const [nudge, setNudge] = useState<MetaNudge | null>(null)
+
+  useEffect(() => {
+    api.get<MetaNudge>('/api/meta/nudge').then(setNudge).catch(() => setNudge(null))
+  }, [])
 
   async function runMeta() {
     setMetaRunning(true)
@@ -156,6 +167,20 @@ export function LessonsPanel() {
         title="META analysis"
         description="One Opus pass over HIVE's own stats (lessons, trust, failure clusters, costs, estimates). Advises only — nothing auto-executes. Cost: ~$0.10–0.50 depending on history size."
       >
+        {nudge?.should_nudge && (
+          <div className="mb-3 rounded-soft bg-amber-500/10 border border-amber-500/30 p-2.5">
+            <div className="text-xs font-medium text-amber-500">
+              ⚠ Recurring failures in the last {nudge.window_hours}h — run META?
+            </div>
+            <ul className="mt-1 text-[11px] text-ink-muted">
+              {nudge.clusters.slice(0, 3).map((c) => (
+                <li key={c.failure_class}>
+                  ×{c.count} — {c.failure_class}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <button
           type="button"
           className="btn-ghost text-xs"

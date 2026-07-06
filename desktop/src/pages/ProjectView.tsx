@@ -220,6 +220,7 @@ export function ProjectView() {
         agents={agentArray}
         activity={project.activity}
         costUsd={totalCost}
+        sessionId={id}
         onAgentClick={(aid) => setDrillAgent(aid)}
         onCancel={() => void cancel()}
         cancelEnabled={cancelEnabled}

@@ -146,7 +146,8 @@ async def orchestrator_node(state: GraphState) -> dict:
         build_solo_composition,
         resolve_task_shape,
     )
-    shape = await resolve_task_shape(message, state.get("task_shape") or "auto")
+    shape = await resolve_task_shape(message, state.get("task_shape") or "auto",
+                                     session_id=state["session_id"])
     try:
         await write_event(HiveEvent(
             type=EventType.TASK_SHAPE, agent_id="orchestrator",
@@ -1067,24 +1068,58 @@ async def _summarize_worker_run(
     )
 
 
-async def _reserve_local_vram(agent: SpawnedAgent) -> bool:
-    """Reserve VRAM for a local worker; True when it fits (or is unknowable)."""
-    from backend.models_local import discover_local_models, estimate_vram_mb
+# F0.4: below this much available system RAM, don't trigger another local
+# model load — the 32GB box runs backend + Tauri + CLI workers + sometimes
+# ComfyUI, and RAM (not VRAM) is the likelier bottleneck. Disk is NOT
+# checked by design: the user pulls models manually, HIVE never auto-pulls.
+_MIN_FREE_RAM_GB = float(os.environ.get("HIVE_MIN_FREE_RAM_GB", "4"))
+
+
+def _ram_pressure() -> str | None:
+    """Reason string when available RAM is below the floor, else None."""
+    try:
+        import psutil
+        available_gb = psutil.virtual_memory().available / 2**30
+    except Exception as exc:  # noqa: BLE001 — a broken probe must not block
+        logger.debug("RAM probe failed: %s", exc)
+        return None
+    if available_gb < _MIN_FREE_RAM_GB:
+        return (f"ram_pressure: {available_gb:.1f}GB available < "
+                f"{_MIN_FREE_RAM_GB:.0f}GB floor")
+    return None
+
+
+async def _reserve_local_vram(agent: SpawnedAgent) -> tuple[bool, str]:
+    """Reserve resources for a local worker.
+
+    Returns (fits, reason) — reason set on refusal so the model/fallback
+    event says WHICH resource ran out (VRAM vs RAM vs not-pulled)."""
+    from backend.models_local import discover_local_models
     from backend.resources import vram_manager
+
+    ram_reason = _ram_pressure()
+    if ram_reason is not None:
+        logger.info("Local spawn refused for %s: %s", agent.agent_id, ram_reason)
+        return False, ram_reason
 
     model_name = agent.model.split(":", 1)[1]
     try:
         pool = await discover_local_models()
     except Exception as exc:  # noqa: BLE001
         logger.debug("VRAM check skipped (discovery failed): %s", exc)
-        return True  # Ollama-side queuing is the backstop
+        return True, ""  # Ollama-side queuing is the backstop
     match = next((m for m in pool if m.name == model_name), None)
     if match is None:
         # Not pulled (planner hallucinated or model was removed) — falling
         # back is strictly better than a guaranteed Ollama 404.
         logger.info("Local model %s not in pool — falling back", model_name)
-        return False
-    return await vram_manager.reserve(agent.agent_id, match.vram_need_mb)
+        return False, f"model {model_name} not in the local pool"
+    # F0.4: a resident model consumes no NEW headroom — reserve 0 (keeps
+    # the ledger key for symmetry; always fits).
+    need = 0 if match.resident else match.vram_need_mb
+    if await vram_manager.reserve(agent.agent_id, need):
+        return True, ""
+    return False, "insufficient VRAM headroom at spawn"
 
 
 async def _execute_worker(
@@ -1230,7 +1265,7 @@ async def _execute_worker(
     # Refusal swaps to the brief's declared Claude fallback tier, visibly.
     vram_reservation_key: str | None = None
     if agent.model.startswith("ollama:"):
-        fitted = await _reserve_local_vram(agent)
+        fitted, refuse_reason = await _reserve_local_vram(agent)
         if fitted:
             vram_reservation_key = agent.agent_id
         else:
@@ -1240,7 +1275,7 @@ async def _execute_worker(
                 type=EventType.MODEL_FALLBACK,
                 agent_id=agent.agent_id, session_id=session_id,
                 raw_payload={"from": original, "to": agent.model,
-                             "reason": "insufficient VRAM headroom at spawn"},
+                             "reason": refuse_reason},
             )
             try:
                 await write_event(fallback_event)

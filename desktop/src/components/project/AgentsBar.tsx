@@ -10,14 +10,32 @@
  */
 import { IconHexagon, IconPlayerPauseFilled, IconPlayerStopFilled } from '@tabler/icons-react'
 import clsx from 'clsx'
-import { useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { api } from '../../lib/api'
 import type { AgentInfo } from '../../lib/types'
+
+/** F0.2 — per-session cost breakdown by role (GET /api/cost/session/:id). */
+interface RoleCost {
+  role: string
+  cost_usd: number
+  input_tokens: number
+  output_tokens: number
+  calls: number
+  local: boolean
+}
+interface CostBreakdown {
+  session_id: string
+  total_usd: number
+  saved_via_local_usd: number
+  by_role: RoleCost[]
+}
 
 interface Props {
   orchestratorModel?: string
   agents: AgentInfo[]
   activity: Record<string, string>
   costUsd?: number
+  sessionId?: string
   onPauseAll?: () => void
   /** Open the agent's drill-down panel. Click an AgentPill to trigger. */
   onAgentClick?: (agentId: string) => void
@@ -105,16 +123,64 @@ function AgentPill({
   )
 }
 
+function CostPopover({ sessionId, onClose }: { sessionId: string; onClose: () => void }) {
+  const [data, setData] = useState<CostBreakdown | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    api
+      .get<CostBreakdown>(`/api/cost/session/${sessionId}`)
+      .then(setData)
+      .catch((e) => setError(e instanceof Error ? e.message : 'failed'))
+  }, [sessionId])
+  return (
+    <div className="absolute right-0 top-8 z-30 w-72 card p-3 shadow-lg border border-line bg-bg">
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-xs font-medium text-ink">Session cost</div>
+        <button type="button" onClick={onClose} className="text-ink-faint text-xs hover:text-ink">✕</button>
+      </div>
+      {error && <div className="text-[11px] text-red-500">{error}</div>}
+      {!data && !error && <div className="text-[11px] text-ink-faint">loading…</div>}
+      {data && (
+        <>
+          <div className="space-y-1">
+            {data.by_role.map((r) => (
+              <div key={`${r.role}-${r.local}`} className="flex items-center justify-between text-[11px]">
+                <span className="text-ink-muted truncate">
+                  {r.local ? '🏠 ' : ''}{r.role} <span className="text-ink-faint">×{r.calls}</span>
+                </span>
+                <span className={r.local ? 'text-emerald-500' : 'text-ink'}>
+                  {r.local ? '$0' : `$${r.cost_usd.toFixed(3)}`}
+                </span>
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center justify-between text-[11px] mt-2 pt-2 border-t border-line">
+            <span className="text-ink font-medium">total</span>
+            <span className="text-ink font-medium">${data.total_usd.toFixed(3)}</span>
+          </div>
+          {data.saved_via_local_usd > 0 && (
+            <div className="text-[10px] text-emerald-500 mt-1">
+              saved ~${data.saved_via_local_usd.toFixed(3)} via local (vs haiku)
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
 export function AgentsBar({
   orchestratorModel = 'claude:opus',
   agents,
   activity,
   costUsd,
+  sessionId,
   onPauseAll,
   onAgentClick,
   onCancel,
   cancelEnabled,
 }: Props) {
+  const [showCosts, setShowCosts] = useState(false)
   return (
     <div className="flex items-center gap-3 px-6 py-3 border-b border-line bg-bg overflow-x-auto">
       {/* Orchestrator pill (always present, larger, gradient) */}
@@ -145,9 +211,19 @@ export function AgentsBar({
         )}
       </div>
 
-      <div className="flex items-center gap-3 shrink-0 ml-auto">
+      <div className="flex items-center gap-3 shrink-0 ml-auto relative">
         {typeof costUsd === 'number' && (
-          <div className="text-xs text-ink-muted">${costUsd.toFixed(4)}</div>
+          <button
+            type="button"
+            onClick={() => sessionId && setShowCosts((v) => !v)}
+            title="Cost breakdown by role"
+            className={clsx('text-xs text-ink-muted', sessionId && 'hover:text-ink underline decoration-dotted')}
+          >
+            ${costUsd.toFixed(4)}
+          </button>
+        )}
+        {showCosts && sessionId && (
+          <CostPopover sessionId={sessionId} onClose={() => setShowCosts(false)} />
         )}
         {onCancel && (
           <button

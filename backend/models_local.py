@@ -58,6 +58,10 @@ class LocalModel:
     vram_need_mb: int
     available: bool = False
     unavailable_reason: str = ""
+    # F0.4: already loaded in VRAM (from /api/ps) — needs NO new headroom.
+    # Without this, a resident 19GB model was double-counted and marked
+    # unavailable the moment its own residency ate the headroom.
+    resident: bool = False
 
     def as_dict(self) -> dict:
         return {
@@ -67,6 +71,7 @@ class LocalModel:
             "vram_need_mb": self.vram_need_mb,
             "available": self.available,
             "unavailable_reason": self.unavailable_reason,
+            "resident": self.resident,
         }
 
 
@@ -104,6 +109,17 @@ async def discover_local_models(base_url: str | None = None) -> list[LocalModel]
             resp = await client.get(f"{base}/api/tags")
             resp.raise_for_status()
             tags = resp.json().get("models") or []
+            # F0.4: /api/ps lists models currently loaded in VRAM — a
+            # resident model needs no new headroom (it was being
+            # double-counted and marked unavailable by its own residency).
+            resident: set[str] = set()
+            try:
+                ps = await client.get(f"{base}/api/ps")
+                ps.raise_for_status()
+                resident = {str(m.get("name") or "").strip()
+                            for m in (ps.json().get("models") or [])}
+            except Exception as exc:  # noqa: BLE001 — residency is a bonus
+                logger.debug("Ollama /api/ps failed: %s", exc)
     except Exception as exc:  # noqa: BLE001 — any failure means "no local pool"
         logger.debug("Ollama discovery failed at %s: %s", base, exc)
         return []
@@ -118,24 +134,18 @@ async def discover_local_models(base_url: str | None = None) -> list[LocalModel]
         caps, tier = resolve_capabilities(name, size_gb)
         need_mb = estimate_vram_mb(size_gb)
         model = LocalModel(name=name, size_gb=size_gb, capabilities=caps,
-                           tier_equivalence=tier, vram_need_mb=need_mb)
-        if snap is None:
-            # VRAM unknowable → don't block; Ollama queues internally.
+                           tier_equivalence=tier, vram_need_mb=need_mb,
+                           resident=name in resident)
+        if model.resident or snap is None:
+            # Resident → already paid for; unknowable VRAM → don't block.
             model.available = True
-        elif need_mb <= snap.headroom_mb + _loaded_bonus(tag, snap):
+        elif need_mb <= snap.headroom_mb:
             model.available = True
         else:
             model.unavailable_reason = (
                 f"needs ~{need_mb}MB VRAM, headroom {snap.headroom_mb}MB")
         models.append(model)
     return models
-
-
-def _loaded_bonus(tag: dict, snap) -> int:
-    """A model already resident in VRAM doesn't need headroom twice.
-    /api/tags has no residency info, so this stays 0 for now; kept as the
-    single place to improve when /api/ps is wired in."""
-    return 0
 
 
 def best_local_for(capability: str, models: list[LocalModel]) -> LocalModel | None:

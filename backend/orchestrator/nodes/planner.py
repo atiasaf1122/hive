@@ -266,6 +266,17 @@ async def orchestrate(
             # The consolidated assistant message — supersedes partial
             # chunks so we don't end up double-counting the text.
             final_text = event.text
+        elif event.type == EventType.COST:
+            # F0.1: the planner was the single biggest per-session cost
+            # NOT in cost_log — every economics number was understating.
+            try:
+                from backend.persistence.events import write_cost
+                await write_cost(session_id, f"planner-{session_id}",
+                                 event.input_tokens or 0,
+                                 event.output_tokens or 0,
+                                 event.cost_usd or 0.0)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Planner cost write failed: %s", exc)
         elif event.type == EventType.AGENT_ERROR:
             logger.error("Orchestrator failed: %s", event.error)
             return OrchestratorDecision(
