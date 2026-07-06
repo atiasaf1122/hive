@@ -31,6 +31,15 @@ interface ChatProps {
   stallHint?: string | null
 }
 
+// E2: local (Ollama) workers run on the user's own GPUs at $0.
+function isLocalModel(model?: string): boolean {
+  return !!model && !model.startsWith('claude:')
+}
+
+function localModelName(model: string): string {
+  return model.replace(/^(ollama|local):/, '')
+}
+
 export function Chat({ sessionId, history, team, agents, interrupt, plannerLog, stallHint }: ChatProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null)
 
@@ -155,7 +164,13 @@ function ActivityCard({ team, agents }: { team: TeamComposition; agents: AgentIn
                 <span className="text-ink">
                   {m.role}{(m.count ?? 1) > 1 ? ` ×${m.count}` : ''}
                 </span>
-                <span className="text-ink-faint text-xs">{m.model}</span>
+                {isLocalModel(m.model) ? (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-500 shrink-0">
+                    🏠 {localModelName(m.model)} · $0
+                  </span>
+                ) : (
+                  <span className="text-ink-faint text-xs">{m.model}</span>
+                )}
                 {m.passive && <span className="text-ink-faint text-xs">(passive)</span>}
                 {(m.mcp_servers ?? []).map((s) => (
                   <span key={s} className="text-[10px] px-1.5 py-0.5 rounded-full bg-sky-500/15 text-sky-500 shrink-0">
@@ -238,6 +253,10 @@ function ApprovalCard({ sessionId, payload }: { sessionId: string; payload: Inte
           {payload.estimate
             ? `Est. $${payload.estimate.cost_median_usd.toFixed(2)}–$${payload.estimate.cost_p90_usd.toFixed(2)} · ~${Math.round(payload.estimate.duration_median_s / 60)}–${Math.max(1, Math.round(payload.estimate.duration_p90_s / 60))} min · based on ${payload.estimate.based_on_sessions} similar sessions`
             : 'No cost estimate yet — not enough similar sessions.'}
+          {(() => {
+            const locals = (comp?.team ?? []).filter((m) => isLocalModel(m.model)).length
+            return locals > 0 ? ` · ${locals} local agent${locals > 1 ? 's' : ''} at $0` : ''
+          })()}
         </div>
         {comp && (
           <>
@@ -245,7 +264,13 @@ function ApprovalCard({ sessionId, payload }: { sessionId: string; payload: Inte
               {comp.team.map((m, i) => (
                 <li key={i} className="text-sm text-ink">
                   • {m.role}{(m.count ?? 1) > 1 ? ` ×${m.count}` : ''}{' '}
-                  <span className="text-ink-faint">[{m.model}]</span>
+                  {isLocalModel(m.model) ? (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-500">
+                      🏠 {localModelName(m.model)} · $0
+                    </span>
+                  ) : (
+                    <span className="text-ink-faint">[{m.model}]</span>
+                  )}
                   {m.passive && <span className="text-ink-faint"> (passive)</span>}
                   {(m.mcp_servers ?? []).map((s) => (
                     <span key={s} className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-sky-500/15 text-sky-500">

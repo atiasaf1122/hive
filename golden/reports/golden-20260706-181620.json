@@ -1,0 +1,98 @@
+{
+  "timestamp": "20260706-181620",
+  "results": [
+    {
+      "name": "ambiguous-task",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 7.3,
+      "cost_usd": 0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "agents_spawned": 0,
+      "session_id": "gf6691b0"
+    },
+    {
+      "name": "docs-only",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 72.8,
+      "cost_usd": 0.0653,
+      "input_tokens": 62,
+      "output_tokens": 3098,
+      "agents_spawned": 1,
+      "session_id": "g2ea12a4"
+    },
+    {
+      "name": "flask-todo-api",
+      "success": false,
+      "failures": [
+        "command_succeeds: `python3 -m pytest -q` exited 5: \nno tests ran in 0.00s\n"
+      ],
+      "wall_seconds": 178.0,
+      "cost_usd": 0.2839,
+      "input_tokens": 46,
+      "output_tokens": 6809,
+      "agents_spawned": 2,
+      "session_id": "gd7b4cce"
+    },
+    {
+      "name": "lessons-injection",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 94.8,
+      "cost_usd": 0.202,
+      "input_tokens": 32,
+      "output_tokens": 7171,
+      "agents_spawned": 1,
+      "session_id": "g913a14c"
+    },
+    {
+      "name": "multi-file-python",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 104.3,
+      "cost_usd": 0.4072,
+      "input_tokens": 54,
+      "output_tokens": 11536,
+      "agents_spawned": 2,
+      "session_id": "g28df5f2"
+    },
+    {
+      "name": "palette-playwright",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 186.5,
+      "cost_usd": 0.5643,
+      "input_tokens": 64,
+      "output_tokens": 11703,
+      "agents_spawned": 2,
+      "session_id": "g054b56a"
+    },
+    {
+      "name": "snake-game",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 290.6,
+      "cost_usd": 0.9278,
+      "input_tokens": 3334,
+      "output_tokens": 21736,
+      "agents_spawned": 2,
+      "session_id": "gd8fd539"
+    },
+    {
+      "name": "tiny-fix",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 42.4,
+      "cost_usd": 0.057,
+      "input_tokens": 46,
+      "output_tokens": 2959,
+      "agents_spawned": 1,
+      "session_id": "g2237379"
+    }
+  ],
+  "total_cost_usd": 2.5075,
+  "passed": 7,
+  "total": 8
+}

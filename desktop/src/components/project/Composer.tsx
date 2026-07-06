@@ -23,10 +23,15 @@ interface Props {
   disabled?: boolean
 }
 
+// E3: routing override — Auto lets the classifier decide; explicit wins.
+const TASK_SHAPES = ['auto', 'solo', 'swarm', 'chat'] as const
+type TaskShape = (typeof TASK_SHAPES)[number]
+
 export function Composer({ sessionId, disabled }: Props) {
   const [text, setText] = useState('')
   const [selectedSlash, setSelectedSlash] = useState(0)
   const [sending, setSending] = useState(false)
+  const [shape, setShape] = useState<TaskShape>('auto')
   const taRef = useRef<HTMLTextAreaElement | null>(null)
 
   const appendUser = useSessions((s) => s.appendUserMessage)
@@ -73,7 +78,10 @@ export function Composer({ sessionId, disabled }: Props) {
     setBody('')
     setSending(true)
     try {
-      await api.post(`/api/sessions/${sessionId}/message`, { text: body })
+      await api.post(`/api/sessions/${sessionId}/message`, {
+        text: body,
+        task_shape: shape,
+      })
     } finally {
       setSending(false)
     }
@@ -155,6 +163,19 @@ export function Composer({ sessionId, disabled }: Props) {
             />
 
             <div className="flex items-center gap-1 mt-2 pt-2 border-t border-line text-ink-faint">
+              <select
+                value={shape}
+                onChange={(e) => setShape(e.target.value as TaskShape)}
+                disabled={disabled}
+                title="How to route this message: Auto (classifier decides) · Solo (one worker, no swarm) · Swarm (full planning) · Chat (answer only, no agents)"
+                className="text-[11px] bg-transparent border border-line rounded-soft px-1.5 py-0.5 text-ink-muted outline-none hover:border-ink-faint cursor-pointer"
+              >
+                {TASK_SHAPES.map((s) => (
+                  <option key={s} value={s}>
+                    {s === 'auto' ? 'Auto' : s[0].toUpperCase() + s.slice(1)}
+                  </option>
+                ))}
+              </select>
               <div className="flex-1" />
 
               <div className="text-[11px] text-ink-faint mr-3 hidden sm:block">

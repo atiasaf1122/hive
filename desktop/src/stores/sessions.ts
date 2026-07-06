@@ -167,6 +167,17 @@ export const useSessions = create<State & Actions>((set, get) => ({
         case 'orchestrator_decision':
           if (ev.team_composition) team = ev.team_composition
           break
+        case 'task_shape':
+          // E3: show WHY this turn was routed the way it was — the
+          // classifier's shape + one-line reasoning in the planner log.
+          if (ev.shape) {
+            const via = ev.engine === 'override' ? 'your override' : String(ev.engine ?? '')
+            plannerLog = [
+              ...plannerLog,
+              `→ routed as ${String(ev.shape).toUpperCase()} (${ev.reasoning ?? ''}) · via ${via}`,
+            ].slice(-20)
+          }
+          break
         case 'orchestrator_response':
           if (ev.text) {
             history = [...history, { role: 'assistant', content: ev.text, ts: Date.now() / 1000 }]

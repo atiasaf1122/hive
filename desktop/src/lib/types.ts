@@ -119,6 +119,10 @@ export interface WSEvent {
   kind?: string
   /** Human-readable hint for orchestrator_stall_hint. */
   hint?: string
+  /** task_shape (E3): router decision for the current turn. */
+  shape?: string
+  reasoning?: string
+  engine?: string
 }
 
 /* ── Cost summary (Phase 8 endpoint, reused for the dashboard sparkline) */
