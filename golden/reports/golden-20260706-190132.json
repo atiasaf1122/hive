@@ -1,0 +1,19 @@
+{
+  "timestamp": "20260706-190132",
+  "results": [
+    {
+      "name": "tiny-fix",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 30.8,
+      "cost_usd": 0.0253,
+      "input_tokens": 610,
+      "output_tokens": 1284,
+      "agents_spawned": 1,
+      "session_id": "gcd472ec"
+    }
+  ],
+  "total_cost_usd": 0.0253,
+  "passed": 1,
+  "total": 1
+}

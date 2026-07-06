@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -507,14 +508,28 @@ _INLINE_FILE_LIMIT = 15_000       # chars per file
 _INLINE_TOTAL_LIMIT = 45_000      # chars across all inlined files
 
 
+_FILE_TOKEN_RE = re.compile(r"[\w./\\-]+\.\w{1,6}\b")
+
+
 def _inline_hint_files(agent: SpawnedAgent) -> str:
-    """Current contents of the agent's files_hint, for tool-less workers."""
-    if not agent.files_hint or not agent.worktree_path:
+    """Current contents of the agent's files_hint, for tool-less workers.
+
+    SOLO briefs carry no files_hint (the brief IS the raw request), so a
+    blind local worker refused a trivial edit for lack of file contents
+    (E5 hybrid finding). Fall back to file-like tokens parsed from the
+    brief — only ones that actually exist in the worktree are inlined.
+    """
+    if not agent.worktree_path:
+        return ""
+    hints = list(agent.files_hint or [])
+    if not hints:
+        hints = _FILE_TOKEN_RE.findall(agent.subtask or "")
+    if not hints:
         return ""
     root = Path(agent.worktree_path)
     parts: list[str] = []
     budget = _INLINE_TOTAL_LIMIT
-    for rel in agent.files_hint:
+    for rel in dict.fromkeys(hints):
         target = root / rel
         if not target.is_file() or budget <= 0:
             continue
