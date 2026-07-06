@@ -1,0 +1,19 @@
+{
+  "timestamp": "20260706-191309",
+  "results": [
+    {
+      "name": "snake-game",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 37.9,
+      "cost_usd": 0.0,
+      "input_tokens": 277,
+      "output_tokens": 1273,
+      "agents_spawned": 1,
+      "session_id": "g1f08d21"
+    }
+  ],
+  "total_cost_usd": 0.0,
+  "passed": 1,
+  "total": 1
+}

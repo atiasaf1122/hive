@@ -1,0 +1,22 @@
+{
+  "timestamp": "20260706-191230",
+  "results": [
+    {
+      "name": "lessons-injection",
+      "success": false,
+      "failures": [
+        "file_exists: CONTRIBUTING.md missing",
+        "file_exists: release-notes.md missing"
+      ],
+      "wall_seconds": 39.1,
+      "cost_usd": 0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "agents_spawned": 0,
+      "session_id": "gab13e3b"
+    }
+  ],
+  "total_cost_usd": 0,
+  "passed": 0,
+  "total": 1
+}

@@ -41,6 +41,10 @@ class GoldenSpec:
     criteria: list[Criterion]
     workspace_fixture: dict[str, str] = field(default_factory=dict)
     timeout_minutes: float = 15.0
+    # E5: init the workspace as a git repo on this branch (fixture files
+    # committed) BEFORE the session — specs whose premise involves the
+    # repo's git state need it to exist at PLANNING time, not spawn time.
+    git_branch: str = ""
 
 
 def load_specs(only: str | None = None, golden_dir: Path = GOLDEN_DIR) -> list[GoldenSpec]:
@@ -53,6 +57,7 @@ def load_specs(only: str | None = None, golden_dir: Path = GOLDEN_DIR) -> list[G
             criteria=[Criterion(**c) for c in data.get("success_criteria", [])],
             workspace_fixture=data.get("workspace_fixture") or {},
             timeout_minutes=float(data.get("timeout_minutes", 15)),
+            git_branch=str(data.get("git_branch") or ""),
         )
         if only and spec.name != only:
             continue
@@ -102,6 +107,13 @@ async def run_spec(spec: GoldenSpec) -> dict:
         target = workspace / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content)
+    if spec.git_branch:
+        for cmd in (["git", "init", "-b", spec.git_branch],
+                    ["git", "config", "user.email", "golden@hive"],
+                    ["git", "config", "user.name", "golden"],
+                    ["git", "add", "-A"],
+                    ["git", "commit", "-m", "fixture", "--allow-empty"]):
+            subprocess.run(cmd, cwd=workspace, check=True, capture_output=True)
 
     session_id = f"g{uuid.uuid4().hex[:7]}"
     started = time.time()

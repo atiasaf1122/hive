@@ -43,3 +43,44 @@ modes (builder dropped by the now-fixed race; tester wrote tests before
 the app existed; tester merged no test file). It exercises the hardest
 coordination shape (two agents, dependent outputs) and is kept as-is —
 a coordination-quality canary, expected to pass ~⅔ of runs.
+
+## Hybrid routing comparison — 2026-07-06 (`golden-20260706-191035.json`)
+
+Same 8 specs, hybrid routing ON (E1-E4: task-shape router classifying via
+local qwen3:8b, mechanical solos on local qwen3-coder:30b, local-first
+summarization, planner offered the local pool).
+
+| spec | baseline | hybrid | Δ cost |
+|---|---|---|---|
+| ambiguous-task | PASS $0.00 7s | PASS $0.00 19s | — |
+| docs-only | PASS $0.07 73s | PASS $0.22 78s | +$0.15 |
+| flask-todo-api | FAIL* $0.28 178s | **PASS $0.05 41s** | −$0.23 |
+| lessons-injection | PASS $0.20 95s | FAIL† $0.00 42s | — |
+| multi-file-python | PASS $0.41 104s | PASS $0.40 114s | ≈ |
+| palette-playwright | PASS $0.56 186s | PASS $0.09 101s | −$0.47 |
+| snake-game | PASS $0.93 291s | FAIL‡ $0.10 111s | — |
+| tiny-fix | PASS $0.06 42s | PASS $0.03 21s | −$0.03 |
+
+**Batch totals: baseline 7/8 · $2.51 · ~16 min → hybrid 6/8 · $0.88 ·
+~8.8 min (cost −65%, wall −45%).**
+
+†‡ Both hybrid failures diagnosed — neither was caused by local models:
+- ‡ snake-game: claude CLI stdin flake ("no stdin data received in 3s",
+  exit 1) on a CLAUDE solo worker; re-run PASSED at **$0.00** — the local
+  coder wrote the whole game.
+- † lessons-injection: the planner (correctly) declined an impossible
+  premise — the fixture wasn't a git repo until spawn time, and the
+  E0.3-fixed planner now actually reads the workspace. Spec bug; fixed
+  with the new `git_branch:` fixture field; re-run PASSES at $0.08.
+- flask-todo-api — the baseline's flaky coordination canary — passed
+  under hybrid at $0.05: the solo route had ONE local worker write
+  app.py + tests in a single shot (no coordination to flake).
+- palette-playwright's solo agent npm-installed Playwright itself and
+  drove a real Chromium (verified: real screenshot via node script) —
+  browser verification held without MCP at −$0.47.
+- docs-only got MORE expensive (+$0.15): the swarm path with planner ran
+  where baseline's plan was lighter. Routing guidance left as-is — one
+  regression of $0.15 against $0.73 saved elsewhere.
+
+**Verdict: hybrid routing holds quality (every failure was flake or spec
+bug, both now fixed) while cutting cost ~65% and wall time ~45%.**

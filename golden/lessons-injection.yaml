@@ -3,6 +3,10 @@ prompt: |
   This repository's default branch is nonstandard. Add a CONTRIBUTING.md
   that documents the actual default branch name (check git), and create a
   release-notes.md summarizing the latest commit on that branch.
+# The premise requires a real repo BEFORE planning: the planner reads the
+# workspace, and an un-inited directory makes it (correctly) decline the
+# "check the default branch" task. E5 finding.
+git_branch: trunk
 workspace_fixture:
   README.md: |
     # Legacy project

@@ -1,0 +1,19 @@
+{
+  "timestamp": "20260706-191730",
+  "results": [
+    {
+      "name": "lessons-injection",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 127.8,
+      "cost_usd": 0.0812,
+      "input_tokens": 1320,
+      "output_tokens": 7833,
+      "agents_spawned": 1,
+      "session_id": "g9e48287"
+    }
+  ],
+  "total_cost_usd": 0.0812,
+  "passed": 1,
+  "total": 1
+}
