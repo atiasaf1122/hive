@@ -1,0 +1,19 @@
+{
+  "timestamp": "20260706-224003",
+  "results": [
+    {
+      "name": "local-multifile-refactor",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 42.5,
+      "cost_usd": 0.0,
+      "input_tokens": 1096,
+      "output_tokens": 477,
+      "agents_spawned": 1,
+      "session_id": "gf0ea5f7"
+    }
+  ],
+  "total_cost_usd": 0.0,
+  "passed": 1,
+  "total": 1
+}

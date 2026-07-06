@@ -1,0 +1,49 @@
+name: local-multifile-refactor
+# G4: measures whether the local 30B coder handles real multi-file work with
+# coupling — a rename that ripples across 4 files + tests. The fixture ships a
+# working package; the task renames a function everywhere. If the local worker
+# fails this consistently, the honest outcome is a routing-guidance update
+# (multi-file refactors -> Claude), documented — that's a pass for the phase.
+prompt: |
+  This package has a function named `greet` that should be renamed to
+  `salute` everywhere, with no behaviour change. Rename the function
+  definition and update EVERY caller and its tests so the suite still passes:
+  - lib/core.py defines greet()
+  - lib/api.py calls greet()
+  - main.py calls greet() via api
+  - tests/test_core.py tests greet()
+  After the rename, `python3 -m pytest -q` must pass and no reference to the
+  old name `greet` may remain in any .py file.
+workspace_fixture:
+  lib/__init__.py: ""
+  lib/core.py: |
+    def greet(name):
+        return f"hello, {name}"
+  lib/api.py: |
+    from lib.core import greet
+
+    def welcome(name):
+        return greet(name).upper()
+  main.py: |
+    from lib.api import welcome
+
+    if __name__ == "__main__":
+        print(welcome("world"))
+  tests/test_core.py: |
+    from lib.core import greet
+    from lib.api import welcome
+
+    def test_greet():
+        assert greet("x") == "hello, x"
+
+    def test_welcome():
+        assert welcome("x") == "HELLO, X"
+success_criteria:
+  - type: command_succeeds
+    command: python3 -m pytest -q
+  - type: command_succeeds
+    command: "! grep -rn 'def greet\\|greet(' --include=*.py . "
+  - type: file_contains
+    path: lib/core.py
+    text: def salute
+timeout_minutes: 20

@@ -1,0 +1,30 @@
+name: three-wave-chain
+# G4: exercises ≥3 sequential waves. wave 1 produces a data module, wave 2
+# builds a CLI over it, wave 3 verifies end-to-end by running the CLI. The
+# consumed-file declarations force D4 to sequence them; each wave's inputs
+# must exist on the predecessor branch before it spawns (F4.1).
+prompt: |
+  Build a small Python temperature-conversion tool in three sequential steps,
+  each depending on the previous:
+  1. convert.py — a module with two pure functions: c_to_f(c) and f_to_c(f)
+     (standard formulas, return floats).
+  2. cli.py — an argparse CLI that imports convert.py and exposes
+     `python cli.py c2f 100` (prints the Fahrenheit value) and
+     `python cli.py f2c 212` (prints the Celsius value). It must import from
+     convert.py, not reimplement the math.
+  3. test_tool.py — a pytest suite that imports convert.py AND invokes cli.py
+     as a subprocess, asserting c_to_f(100)==212.0, f_to_c(212)==100.0, and
+     that `python cli.py c2f 100` prints 212.
+  cli.py depends on convert.py; the tests depend on both. Sequence the work.
+success_criteria:
+  - type: file_exists
+    path: convert.py
+  - type: file_exists
+    path: cli.py
+  - type: file_exists
+    path: test_tool.py
+  - type: command_succeeds
+    command: python3 -m pytest -q
+  - type: command_succeeds
+    command: python3 cli.py c2f 100
+timeout_minutes: 25

@@ -1,0 +1,19 @@
+{
+  "timestamp": "20260706-223815",
+  "results": [
+    {
+      "name": "three-wave-chain",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 318.0,
+      "cost_usd": 0.7344,
+      "input_tokens": 5128,
+      "output_tokens": 16729,
+      "agents_spawned": 2,
+      "session_id": "gf2f5641"
+    }
+  ],
+  "total_cost_usd": 0.7344,
+  "passed": 1,
+  "total": 1
+}
