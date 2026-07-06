@@ -67,10 +67,13 @@ Rules:
   with the same brief just to "go faster"; that duplicates the work and wastes tokens.
   The one exception is deliberate perspective diversity (e.g. investigating a bug from several
   angles): then give each agent the same question but a DISTINCT lens, stated in its subtask.
-- `files_hint`: files/dirs this agent will touch. Two agents must NOT list the same file — if
-  they would, merge them into one agent, sequence the work across turns, or make one a reviewer
-  of the other's output. Overlapping hints are enforced mechanically: same-role overlaps get
-  merged into one agent, different-role overlaps get sequenced — plan disjoint to stay parallel.
+- `files_hint`: files/dirs this agent will touch — AND any file it needs to READ that another
+  agent produces (a Tester verifying index.html must list index.html). Overlapping hints are
+  enforced mechanically: same-role overlaps get merged into one agent, different-role overlaps
+  get sequenced into waves (the later agent starts after its predecessor's work is committed).
+  Omitting a consumed file puts producer and consumer in the SAME wave — the consumer then
+  waits forever for a file that never appears in its isolated worktree. Two agents must NOT
+  WRITE the same file — merge them or make one a reviewer instead.
 - `max_turns`: per-agent budget — every tool call costs a turn, so even a one-line edit takes
   ~6-8 turns (read, edit, verify, respond). 10-12 for small/mechanical subtasks, 15-20 standard,
   30 only for large builds. MCP-equipped agents (browser etc.) burn turns fast — give them 25-30

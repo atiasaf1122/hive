@@ -595,6 +595,157 @@ navigational gain. Don't.
 
 # Progress log (newest first)
 
+## 2026-07-06 — Phase E COMPLETE + full-project review
+
+Phase E in one line: the loops D left open are now closed and proven, the
+hybrid brain the project was designed around is real and measured, and the
+whole system has been verified end-to-end. **557 tests passing** (510 → 557),
+14 commits (`c6992dc`..`c5ef999` + this one), backend 14.8k LOC / desktop
+9.3k LOC.
+
+### E0 — Phase D loose ends, all closed with live proof
+
+- **E0.1 learning loop CLOSED.** Audit trail first: every distillation
+  attempt now emits exactly one of lesson/stored | lesson/discarded |
+  lesson/none (crash included) — no silent path can exist. The instrumented
+  conflict re-run answered the D ambiguity: it was a LEGITIMATE 'NONE' (the
+  distiller refused to treat a resolved conflict as a failure). Three
+  deliberate, measured loosenings followed: distill prompt (a resolved
+  conflict with named collision IS learnable), gate prompt (advice may
+  generalize from the evidenced mechanism; facts may not), retrieval
+  (max-over-views at 0.35 — measured: the old 0.55 bar was UNREACHABLE for
+  realistic queries; retrieval was off, not conservative). Then the full
+  loop ran live: conflict → Opus resolution → lesson stored (gate 10/10) →
+  similar task → injected → clean run → hygiene CONFIRMED (applied=1,
+  confirmed=1). A second lesson later stored itself organically
+  ("F-string escaping in generated code", gate 9). Current stats:
+  2 stored / 1 discarded / 1 none — complete trail.
+- **E0.2 + E0.4 cost accounting completed**: Opus llm_review ($0.18–0.37
+  observed) and META's own Opus call now land in cost_log. Known remaining
+  gap: the PLANNER's Sonnet call has never been cost-logged — flagged below.
+- **E0.3 golden baseline**: 7/8 · $2.51 · ~16 min (golden-20260706-181620).
+  The first real run found five real bugs, all fixed: planner max_turns=1
+  killed by its own first tool call (it had been dying in EVERY session that
+  planned with file context — the D2 gate revision loop was silently
+  rescuing it); worker turn-budget starvation (floor 10 now); untracked
+  fixture files → phantom merge conflicts costing an Opus review each; a
+  worktree-creation race that SILENTLY DROPPED whole agents (the flask-todo
+  Builder — now a per-project lock + a visible infrastructure event); an
+  unachievable spec criterion. flask-todo stays flaky (~⅔) as an honest
+  coordination canary.
+- **E0.4 META baseline**: ran live after fixing its own turn budget (same
+  bug class as the planner). $0.34/run (3.1k in / 6.4k out, Opus).
+  Sanity-checked: its failure clusters, cost outliers, and golden numbers
+  all match reality; recommendations are reasonable and its own caveat
+  ("≤37 sessions — nothing is statistically solid") is correct.
+- **E0.5 compaction verified live**: with the env knob at 3 turns, the
+  compaction event fired, the state doc carried all three seeded facts,
+  pruned turns were preserved in the event, and the post-compaction turn
+  answered from the compacted state ("BLUEBIRD"). Found+fixed on the way:
+  the E3 chat route had full tool access and a 2-turn cap — it died on
+  tools and silently fell back to the planner every time.
+
+### E1–E5 — the hybrid brain (measured, not promised)
+
+- **E1**: local pool discovery (qwen3-coder:30b + qwen3:8b pulled onto the
+  2×3090 box; ~24GB), curated capability map, minimal VRAM manager
+  (nvidia-smi + reservation ledger + 85% guard — NOTE: the prompt's premise
+  that a ResourceManager already existed was wrong; it was built this phase),
+  GET /api/models/local, Claude-only degradation intact.
+- **E2**: `local:<model>` tiers in briefs; OllamaWorker gained a
+  file-block harness (write-only + think-strip + traversal guard) so local
+  workers ride the same auto-commit→validation→merge pipeline; per-turn
+  availability digest + routing guidance in the planner; VRAM-aware spawn
+  with declared fallback tier + model/fallback event; 🏠 $0 chips in the UI.
+- **E3**: SOLO/SWARM/CHAT task-shape router, classified BY the local 8B
+  (dogfooding), visible reasoning, composer override, task/shape events.
+  Observed decisions so far: 4 solo + 1 swarm classified locally, 0
+  misroutes. Solo skips planner+gate; chat answers in-session.
+- **E4**: summarization + distillation behind internal_task_caller
+  (local-first, Haiku fallback, hard timeout). HONEST quality check on real
+  inputs (docs/E4_LOCAL_QUALITY_COMPARISON.md): summarization local by
+  default (accurate, slightly thinner evidence); **distillation stays on
+  Haiku** — qwen3:8b invented an unevidenced mechanism, and a local
+  distiller would run the groundedness gate on the model that confabulated.
+- **E5 economics, measured**: baseline 7/8 · $2.51 · ~16 min → hybrid
+  6/8 · $0.88 · ~8.8 min (**cost −65%, wall −45%**), and both hybrid
+  failures were diagnosed as non-local (a claude CLI stdin flake — re-run
+  passed at $0.00 with the local coder writing the whole snake game; and a
+  spec-fixture bug the now-sighted planner correctly refused — fixed with
+  the golden `git_branch` field). flask-todo, the baseline's flaky canary,
+  passed hybrid at $0.05: one local worker, no coordination to flake.
+  cost_log has a local flag; Usage shows "saved via local" at Haiku pricing.
+
+### E6 — full verification
+
+- Code spot-checks of every A–D progress-log claim passed (lifecycle
+  recovery, hard delete, no-retired-IDs test, --resume, hybrid skills
+  search, llm_review only on conflict/validation-failure, per-agent
+  --mcp-config --strict, preflight, origin-filtered trust, trajectory
+  endpoint, META gate on accept-lesson, Stop-hook Desktop sync).
+- **Mixed live session** (swarm override): Sonnet Builder + Sonnet Tester
+  with playwright MCP + Writer, with ALL THREE summarizers running local at
+  $0. Deliverables real (index.html, 331KB browser screenshot, NOTES.md);
+  validation caught the Writer claiming a file outside its lane; Opus
+  review resolved it and its cost was logged. Total $0.87.
+  The FIRST attempt exposed a real coordination gap: the Tester polled 20
+  minutes for the Builder's index.html in its own isolated worktree —
+  produce/consume dependencies only sequence when the consumer lists the
+  file it reads. Planner prompt now requires consumed files in files_hint
+  (overlap → D4 waves). Fixed and re-proven same session.
+
+### Honest stock-taking
+
+**Works, verified live**: the full pipeline (plan → gate → waves → workers →
+auto-commit → validation → summarize → merge → llm_review), the learning
+loop end-to-end, compaction, estimates + estimate/actual, MCP execution
+with real browsers, hybrid routing with real savings, task-shape routing,
+local meta-tasks, trajectory endpoint, session lifecycle + recovery.
+
+**Exists but unproven/undertested in real use**: lessons at scale (n=2 —
+retrieval precision at 0.35 needs watching as the store grows; the 3-strike
+archive has never fired); META's recommendations have never driven an
+accepted lesson or config change; VRAM fallback has never triggered under
+real GPU contention (0 model/fallback events); the replay UI renders but
+hasn't been used in anger; multi-wave plans beyond 2 waves; OllamaWorker on
+true multi-file refactors (only creations and single-file edits proven).
+
+**Missing vs the vision**: (1) planner cost is invisible — the single
+biggest per-session cost is not in cost_log; (2) no sandbox — worktrees
+are still the only blast-radius containment for --dangerously-skip-
+permissions workers; (3) failed agents' committed work is discarded (the
+palette Tester died at the finish line in D and its branch was dropped —
+llm_review should evaluate failed agents' branches); (4) coordination
+between dependent agents relies on planner discipline (waves) — no runtime
+signal lets a consumer WAIT for a producer; (5) META is on-demand only —
+the D-vision's scheduled self-analysis + pattern_detector trigger were
+never wired.
+
+**Too much / deletion candidates**: safety/pattern_detector.py (488 LOC,
+still unwired since Phase 8 — D8 went on-demand instead; wire it or delete
+it); backend/security/ is an empty directory (the executor was reduced in
+Phase A — remove the husk); backend/telegram/ stays parked by decision but
+is untested against everything B–E changed (if phone approvals ever return,
+budget a rewrite, not a revival); the estimator's optional semantic
+tiebreak and TestRun/PackageInstall validators remain deliberately unbuilt.
+
+**Trajectory**: A fixed the foundation, B made the swarm real, C gave it
+hands, D gave it memory and self-knowledge, E made it economical and
+closed D's loops. Each phase demonstrably improved the tool for its one
+user; the golden suite now catches regressions between phases, and the
+learning loop means recurring failure classes should decay instead of
+repeat. The system's honest failure modes are now variance-shaped (model
+nondeterminism, CLI flakes), not architecture-shaped.
+
+**Next, ranked**: (1) log planner cost + surface per-session cost breakdown
+in the UI (small, closes the last accounting hole); (2) llm_review over
+failed agents' branches — stop discarding finished work (medium); (3) let
+consumers wait on producers at runtime (wave-aware file signal or
+respawn-after-wave, medium); (4) scheduled META + wire or delete
+pattern_detector (small-medium); (5) bwrap/container sandbox for workers
+(large, the real security debt); (6) revisit local distillation with a
+bigger local model or split-gate wiring (small, after more lessons exist).
+
 ## 2026-07-06 — Phase D "META / self-improvement" COMPLETE
 
 The learning layer: HIVE now diagnoses its own failures from the event log,
