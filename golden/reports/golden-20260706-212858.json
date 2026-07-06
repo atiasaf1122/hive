@@ -1,0 +1,23 @@
+{
+  "timestamp": "20260706-212858",
+  "results": [
+    {
+      "name": "palette-playwright",
+      "success": false,
+      "failures": [
+        "file_exists: index.html missing",
+        "file_contains: index.html missing",
+        "file_exists: screenshot.png missing"
+      ],
+      "wall_seconds": 121.1,
+      "cost_usd": 0.2673,
+      "input_tokens": 1984,
+      "output_tokens": 4480,
+      "agents_spawned": 1,
+      "session_id": "gfe171f0"
+    }
+  ],
+  "total_cost_usd": 0.2673,
+  "passed": 0,
+  "total": 1
+}

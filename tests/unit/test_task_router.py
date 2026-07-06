@@ -94,6 +94,21 @@ async def test_solo_mechanical_routes_local_coder() -> None:
 
 
 @pytest.mark.asyncio
+async def test_solo_browser_task_stays_on_claude_not_local() -> None:
+    """F5: a mechanical solo that needs a real browser must NOT route local
+    (local workers can't drive tools) — E3's MCP-stays-on-Claude rule."""
+    pool = [LocalModel("qwen3-coder:30b", 18.6, frozenset({"coding"}), "t",
+                       estimate_vram_mb(18.6), available=True)]
+    decision = ShapeDecision(shape="solo", reasoning="verify in browser",
+                             engine="x", role="Builder", mechanical=True)
+    with patch("backend.models_local.discover_local_models",
+               new=AsyncMock(return_value=pool)):
+        comp = await build_solo_composition(
+            "Build index.html and verify it with Playwright, save a screenshot", decision)
+    assert comp.team[0].model.startswith("claude:")   # NOT ollama
+
+
+@pytest.mark.asyncio
 async def test_solo_nonmechanical_stays_on_sonnet() -> None:
     decision = ShapeDecision(shape="solo", reasoning="needs context", engine="x",
                              role="Builder", mechanical=False)

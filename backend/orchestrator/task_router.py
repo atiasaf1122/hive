@@ -203,6 +203,17 @@ def _parse(raw: str, engine: str) -> ShapeDecision | None:
 # ── SOLO team synthesis ─────────────────────────────────────────────────────
 
 
+# F5 finding: a SOLO task that needs a real browser / tool-use loop must
+# NOT route to a local worker — local workers have no tool loop (file-block
+# harness only), so browser verification silently produces nothing. This
+# enforces the E3/E2 rule "MCP-equipped subtasks stay on Claude tiers" for
+# the solo path, which build_solo_composition previously skipped.
+_TOOL_RELIANT_RE = re.compile(
+    r"\b(playwright|puppeteer|selenium|browser|screenshot|e2e|"
+    r"end.to.end|headless|chromium|webdriver|navigate to|click the)\b",
+    re.IGNORECASE)
+
+
 async def build_solo_composition(message: str, decision: ShapeDecision):
     """One-agent team from the request itself — no planner call.
 
@@ -214,7 +225,8 @@ async def build_solo_composition(message: str, decision: ShapeDecision):
     from backend.orchestrator.nodes.planner import TeamComposition, TeamMember
 
     model = "claude:sonnet"
-    if decision.mechanical:
+    tool_reliant = bool(_TOOL_RELIANT_RE.search(message))
+    if decision.mechanical and not tool_reliant:
         model = "claude:haiku"
         try:
             pool = await discover_local_models()
@@ -224,9 +236,13 @@ async def build_solo_composition(message: str, decision: ShapeDecision):
         except Exception:  # noqa: BLE001
             pass
 
+    # F5: a browser/tool-reliant solo burns turns fast (install + drive +
+    # verify + screenshot) — 12 starved the palette solo at the finish
+    # line, same class as the E0.3 MCP-turn lesson. 28 for those.
+    max_turns = 28 if tool_reliant else 12
     member = TeamMember(
         role=decision.role, model=model, subtask=message.strip(),
-        max_turns=12, fallback="haiku",
+        max_turns=max_turns, fallback="haiku",
     )
     return TeamComposition(
         team=[member], confidence=0.9,

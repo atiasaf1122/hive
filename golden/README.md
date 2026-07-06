@@ -84,3 +84,25 @@ summarization, planner offered the local pool).
 
 **Verdict: hybrid routing holds quality (every failure was flake or spec
 bug, both now fixed) while cutting cost ~65% and wall time ~45%.**
+
+## Phase F hybrid re-run — 2026-07-06 (`golden-20260706-214951.json`)
+
+Regression check after F1-F4 (guard hook, lifecycle signals, salvage,
+producer/consumer net). **7/8 · $1.59 · ~13 min** vs E5 hybrid (6/8 ·
+$0.88 · ~8.8 min).
+
+The cost rise is honest accounting, not a regression:
+- **$0.34 is the planner cost E5 never logged** (F0.1) — a third of spend
+  that was previously dark. Role breakdown of this run: workers $0.85,
+  planner $0.34, llm-review $0.31, plan-gate $0.09, summarizers/classifier
+  $0 (local).
+- palette-playwright is back on Claude ($0.54, was $0.09 local) because
+  F5 correctly stops routing browser-verification to a tool-less local
+  worker. Real worker spend was $0.85.
+- The guard hook (~24ms/Bash call, Python startup) + Stop signals cost
+  ~nothing; wall time is within run-to-run variance.
+
+The lone failure is flask-todo-api — the documented flaky coordination
+canary (generated-test logic mismatch), not F-caused. Two SOLO-routing
+gaps this run surfaced were fixed in F5 (browser tasks stay on Claude;
+tool-reliant solos get 28 turns not 12).

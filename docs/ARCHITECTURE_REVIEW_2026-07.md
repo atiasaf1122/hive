@@ -595,6 +595,145 @@ navigational gain. Don't.
 
 # Progress log (newest first)
 
+## 2026-07-06 — Phase F "Hardening" COMPLETE
+
+The safety/accounting/salvage/coordination pass — took E6's own ranked
+"next" list, merged the hooks research finding, and cleared the flagged
+cruft. **609 tests passing** (602 → 609 across the phase; started at 557),
+7 commits (`<F0>`..`<F5>`). Backend 15.4k LOC (pattern_detector's 490 out,
+guard + salvage + resources in).
+
+- **F0 — accounting closed, cruft cleared, resource net proven.**
+  - F0.1: the planner's cost was the single biggest per-session spend NOT
+    in cost_log — every prior economics number understated. Now logged
+    (role prefix `planner-`), along with the chat route and task-shape
+    classifier (whose Haiku fallback had been silently FK-failing its
+    writes against a fake session id). Measured live: in the final golden
+    run the planner was **$0.34 of $1.59** — a third of spend that was
+    dark. Full audit: every model call site (gate, distiller, summarizer,
+    llm_review, META, salvage) verified logging.
+  - F0.2: GET /api/cost/session/{id} role breakdown + a click-through cost
+    popover on the AgentsBar (planner / gate / workers / summarizers /
+    review / meta, 🏠 $0 local rows, saved-via-local line).
+  - F0.3: pattern_detector.py DELETED (490 LOC + 7 tests). Decision,
+    documented: its ActivityWindow inputs modelled live-session stalls
+    (file-thrash, no-progress) that nothing ever assembled, NOT the
+    cross-session failure clustering a META nudge needs — only ~20 lines
+    would have mapped over. Replaced by GET /api/meta/nudge (~40 lines:
+    ≥3 same-class failures in 24h → amber "run META?" badge in
+    Settings→Lessons; guard/tripped included so denials cluster). No
+    schedule, no auto-run — this also settles E6's #4 (scheduled META):
+    for one user, nudge-on-signal beats a cron. Empty backend/security/
+    husk removed.
+  - F0.4: a RAM floor (psutil, 4GB default, HIVE_MIN_FREE_RAM_GB) before a
+    local model load — the 32GB box runs backend + Tauri + CLI workers +
+    sometimes ComfyUI, and RAM is the likelier bottleneck than VRAM. Same
+    fallback path as VRAM, reason in the model/fallback event. NO disk
+    checks (by decision — the user pulls models manually). **Both
+    fallbacks proven LIVE** (E6 flagged VRAM fallback had never fired):
+    forced RAM floor → ram_pressure event → worker fell to haiku → task
+    completed; a saturated VRAM ledger → the VRAM refusal path. Two real
+    bugs surfaced by the live proof: (1) a Solo override skipped
+    classification, so mechanical stayed False and overridden solos never
+    routed local; (2) resident models were double-counted against VRAM
+    headroom — /api/ps residency now wired (a loaded model needs no new
+    headroom). So E6's "VRAM fallback unproven" is now closed.
+
+- **F1 — PreToolUse guard hook, the deterministic tripwire.** Research
+  finding (verified against the current hooks reference + LIVE):
+  **PreToolUse hooks fire before the permission-mode check, and a `deny`
+  blocks the tool even under `--dangerously-skip-permissions`** — hooks
+  can only tighten. So a ~200-line stdlib script
+  (backend/guard/pretooluse_guard.py) gives the catastrophic-command net
+  the deleted Phase-A executor never could (the CLI never routed through
+  it). Denies a SHORT list only: rm -rf outside the worktree/~/protected
+  paths, credential reads (~/.ssh ~/.aws *.pem ~/.claude/credentials
+  .git-credentials), fork bombs, mkfs/dd-to-device. Everything else
+  allowed. Injected per Claude worker via a worktree .claude/settings.json
+  (Bash matcher, `.claude/.gitignore '*'` so auto-commit can't sweep it).
+  Denials → GUARD_TRIPPED events (origin=agent). **Proven end-to-end**: a
+  worker under --dangerously-skip-permissions attempted `ls ~/.ssh/`, the
+  guard denied it, the worker was told why and recorded the reason, the
+  event fired, the session continued. Overhead ~24ms per Bash call (Python
+  startup) — negligible; the golden wall time is unchanged. **bwrap/
+  container drops off the backlog** — containment is now worktree
+  isolation + this guard (CLAUDE.md invariant #3 updated). Local workers
+  have no Bash tool, so the guard is Claude-scoped by construction.
+
+- **F2 — Stop/SubagentStop push signals.** The same worktree settings
+  register Stop hooks that append a signal line the instant a turn ends;
+  a watcher reaps a process still streaming 15s past its Stop signal (hung
+  with a dead turn). Idempotent with A1's pid-death polling — a signal for
+  a finished stream is a no-op.
+
+- **F3 — salvage review (E6 #2).** A failed agent's committed branch is no
+  longer silently dropped (the palette Tester died at the finish line in
+  D). Opus judges merge-vs-discard over the branch diff; a merge goes
+  through the normal merge_to_main path. Cost-guarded: ≥1 commit AND >5
+  changed lines, or it never pays for Opus. SALVAGE_REVIEW events; the
+  call is cost-logged.
+
+- **F4 — producer/consumer runtime net (E6 #3).** F4.2: D4's overlap
+  resolver now emits a PLAN_ADJUSTED event when it resequences a
+  produce/consume dependency into a later wave (was a silent log line).
+  F4.1: before a wave>0 agent runs, its declared consumed inputs (files a
+  lower-wave agent produces) must exist on a producer branch — a missing
+  one fails the spawn instantly with a named-file event naming the likely
+  producer, instead of the 20-minute poll E6 hit. A file only this agent
+  lists is its own output, never a consumed input.
+
+- **F5 — regression proof + close-out.** Hybrid golden vs the E5 baseline:
+
+  | | E5 hybrid | F hybrid |
+  |---|---|---|
+  | passed | 6/8 | **7/8** |
+  | total cost | $0.88 | $1.59 |
+  | wall | ~8.8 min | ~13 min |
+
+  The cost rise is honest, not a regression: **$0.34 is the planner cost
+  E5 never counted** (F0.1) and palette-playwright is back on Claude
+  ($0.54) because F5 correctly stops routing browser tasks to a
+  tool-less local worker. Real worker spend was $0.85; summarizers ran
+  local at $0; saved-via-local ~$0.05 on this small batch. The guard hook
+  + lifecycle signals cost ~nothing (wall unchanged within variance).
+  The lone failure is flask-todo-api — the documented flaky coordination
+  canary (generated-test logic mismatch, ~⅓ fail rate), not F-caused.
+
+  Two real routing gaps the F golden run surfaced and fixed (F5): the SOLO
+  path routed browser-verification and multi-part tasks to a local worker
+  (local has no tool loop) — now a tool-reliant keyword guard keeps them
+  on Claude; and a tool-reliant solo starved at 12 turns (the E0.3
+  MCP-turn lesson again) — now 28.
+
+### What E6's "unproven" list looks like after F
+
+- **VRAM fallback**: now PROVEN live (F0.4) — plus a resident-model
+  double-count bug fixed and a RAM sibling added.
+- **multi-wave >2 / OllamaWorker on multi-file refactors**: still only
+  exercised at wave-1 and single-file/creation depth — F4 hardened the
+  wave machinery but didn't stress it past 2 waves.
+- **lessons at scale**: still n=2 stored; the 0.35 retrieval bar and
+  3-strike archive remain unexercised at volume.
+
+### Honest next, ranked
+
+1. **Salvage/guard/nudge have unit + (guard) live proof but no
+   multi-agent live salvage yet** — drive one real session where a
+   mid-team agent fails with committed work and watch salvage merge it
+   end-to-end (small).
+2. **Classifier misroutes are the live failure mode now** — the 8B
+   sent browser/coordination tasks to solo-local twice in one golden run.
+   F5 patched the two known keywords; a cleaner fix is to let the
+   classifier see "needs tools" as a first-class output field (medium).
+3. **flask-todo canary**: either accept it as intentional variance signal
+   or split it into a deterministic single-agent spec (small).
+4. **Multi-wave >2 and local multi-file refactors** still need a
+   deliberate stress spec (medium).
+5. **A real OS sandbox is no longer planned** — the guard + worktree
+   model is the containment story. Revisit only if the guard's
+   catastrophic list proves insufficient in real use (watch GUARD_TRIPPED
+   clusters).
+
 ## 2026-07-06 — Phase E COMPLETE + full-project review
 
 Phase E in one line: the loops D left open are now closed and proven, the

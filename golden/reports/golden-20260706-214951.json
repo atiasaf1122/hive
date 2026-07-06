@@ -1,0 +1,98 @@
+{
+  "timestamp": "20260706-214951",
+  "results": [
+    {
+      "name": "ambiguous-task",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 38.6,
+      "cost_usd": 0.0796,
+      "input_tokens": 2,
+      "output_tokens": 386,
+      "agents_spawned": 0,
+      "session_id": "g8f30605"
+    },
+    {
+      "name": "docs-only",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 40.4,
+      "cost_usd": 0.0,
+      "input_tokens": 494,
+      "output_tokens": 573,
+      "agents_spawned": 1,
+      "session_id": "gfa134b0"
+    },
+    {
+      "name": "flask-todo-api",
+      "success": false,
+      "failures": [
+        "command_succeeds: `python3 -m pytest -q` exited 1: \u001b[1m\u001b[31mtest_app.py\u001b[0m:39: AssertionError\n\u001b[36m\u001b[1m=========================== short test summary info ============================\u001b[0m\n\u001b[31mFAILED\u001b[0m test_app.py::\u001b[1mtest_get_todos_with_data\u001b[0m - AssertionError: assert 2 == 1\n\u001b[31m\u001b[31m\u001b[1m1 failed\u001b[0m, \u001b[32m6 passed\u001b[0m\u001b[31m in 0.14s\u001b[0m\u001b[0m\n"
+      ],
+      "wall_seconds": 44.2,
+      "cost_usd": 0.0,
+      "input_tokens": 530,
+      "output_tokens": 1212,
+      "agents_spawned": 1,
+      "session_id": "g74159c6"
+    },
+    {
+      "name": "lessons-injection",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 164.8,
+      "cost_usd": 0.3574,
+      "input_tokens": 1403,
+      "output_tokens": 9877,
+      "agents_spawned": 1,
+      "session_id": "g8991413"
+    },
+    {
+      "name": "multi-file-python",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 266.1,
+      "cost_usd": 0.6207,
+      "input_tokens": 2888,
+      "output_tokens": 17117,
+      "agents_spawned": 2,
+      "session_id": "g4aa9c88"
+    },
+    {
+      "name": "palette-playwright",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 159.4,
+      "cost_usd": 0.5359,
+      "input_tokens": 4775,
+      "output_tokens": 6672,
+      "agents_spawned": 1,
+      "session_id": "g0344118"
+    },
+    {
+      "name": "snake-game",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 58.3,
+      "cost_usd": 0.0,
+      "input_tokens": 551,
+      "output_tokens": 1581,
+      "agents_spawned": 1,
+      "session_id": "g77e49ab"
+    },
+    {
+      "name": "tiny-fix",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 16.7,
+      "cost_usd": 0.0,
+      "input_tokens": 540,
+      "output_tokens": 284,
+      "agents_spawned": 1,
+      "session_id": "gceb0ca3"
+    }
+  ],
+  "total_cost_usd": 1.5936,
+  "passed": 7,
+  "total": 8
+}

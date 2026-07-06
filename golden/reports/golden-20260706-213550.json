@@ -1,0 +1,19 @@
+{
+  "timestamp": "20260706-213550",
+  "results": [
+    {
+      "name": "palette-playwright",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 120.5,
+      "cost_usd": 0.2556,
+      "input_tokens": 1777,
+      "output_tokens": 4286,
+      "agents_spawned": 1,
+      "session_id": "g23c57e5"
+    }
+  ],
+  "total_cost_usd": 0.2556,
+  "passed": 1,
+  "total": 1
+}
