@@ -625,8 +625,8 @@ Windows desktop, backed by four committed scripts in `scripts/`.
   (packaging is PARKED); a default-config build would bake the frontend and
   go stale on every UI change. Launcher auto-prefers a release exe if one
   appears later — zero changes needed then.
-- Noticed: `/health` reports version **0.9.0** while pyproject says 1.0.0 —
-  the venv's installed metadata is stale; `uv pip install -e .` refreshes it.
+- Noticed + fixed: `/health` reported version **0.9.0** (stale venv install
+  metadata) — `uv pip install -e .` refreshed it; `/health` now says 1.0.0.
 
 ## 2026-07-06 — Phase G COMPLETE — HIVE graduates to v1.0.0
 
