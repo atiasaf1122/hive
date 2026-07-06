@@ -955,6 +955,26 @@ async def _summarize_worker_run(
     )
 
 
+async def _reserve_local_vram(agent: SpawnedAgent) -> bool:
+    """Reserve VRAM for a local worker; True when it fits (or is unknowable)."""
+    from backend.models_local import discover_local_models, estimate_vram_mb
+    from backend.resources import vram_manager
+
+    model_name = agent.model.split(":", 1)[1]
+    try:
+        pool = await discover_local_models()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("VRAM check skipped (discovery failed): %s", exc)
+        return True  # Ollama-side queuing is the backstop
+    match = next((m for m in pool if m.name == model_name), None)
+    if match is None:
+        # Not pulled (planner hallucinated or model was removed) — falling
+        # back is strictly better than a guaranteed Ollama 404.
+        logger.info("Local model %s not in pool — falling back", model_name)
+        return False
+    return await vram_manager.reserve(agent.agent_id, match.vram_need_mb)
+
+
 async def _execute_worker(
     agent: SpawnedAgent,
     prompt: str,
@@ -1093,6 +1113,33 @@ async def _execute_worker(
         except Exception as exc:
             logger.warning("claude session lookup failed for %s: %s", agent.agent_id, exc)
 
+    # E2: a local worker must fit VRAM *now* — headroom may have vanished
+    # since planning (user gaming/rendering, another local worker loaded).
+    # Refusal swaps to the brief's declared Claude fallback tier, visibly.
+    vram_reservation_key: str | None = None
+    if agent.model.startswith("ollama:"):
+        fitted = await _reserve_local_vram(agent)
+        if fitted:
+            vram_reservation_key = agent.agent_id
+        else:
+            original = agent.model
+            agent.model = f"claude:{getattr(agent, 'fallback', 'haiku') or 'haiku'}"
+            fallback_event = HiveEvent(
+                type=EventType.MODEL_FALLBACK,
+                agent_id=agent.agent_id, session_id=session_id,
+                raw_payload={"from": original, "to": agent.model,
+                             "reason": "insufficient VRAM headroom at spawn"},
+            )
+            try:
+                await write_event(fallback_event)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Fallback event write failed: %s", exc)
+            await _emit_to_ws(session_id, {
+                "type": str(EventType.MODEL_FALLBACK), "agent_id": agent.agent_id,
+                "session_id": session_id, "from": original, "to": agent.model,
+            })
+            logger.info("Local model %s → %s (VRAM full)", original, agent.model)
+
     worker = ClaudeCLIWorker() if agent.model.startswith("claude:") else OllamaWorker()
     config = WorkerConfig(
         agent_id=agent.agent_id,
@@ -1174,6 +1221,10 @@ async def _execute_worker(
         result["status"] = "failed"
         result["error"] = str(exc)
         result["failure_origin"] = "infrastructure"  # HIVE's own code raised
+    finally:
+        if vram_reservation_key is not None:
+            from backend.resources import vram_manager
+            vram_manager.release(vram_reservation_key)
 
     result["text_output"] = final_text if final_text is not None else "".join(text_parts)
     await _auto_commit_worktree(agent.worktree_path, agent.agent_id)

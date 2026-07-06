@@ -37,6 +37,8 @@ class SpawnedAgent:
     # D4: execution wave (file-overlap sequencing) + who ran before.
     wave: int = 0
     predecessor_note: str = ""
+    # E2: Claude tier used when a local model can't spawn (VRAM full).
+    fallback: str = "haiku"
 
 
 @dataclass
@@ -91,6 +93,20 @@ async def spawn_agents(
                 wt_path = await manager.create(agent_id=agent_id, branch_name=branch)
             except RuntimeError as exc:
                 logger.error("Failed to create worktree for %s: %s", agent_id, exc)
+                # E0.3: a dropped agent must be VISIBLE — the flask-todo
+                # Builder vanished here and the session "succeeded" with
+                # half its team. Persist an infrastructure error event so
+                # the trajectory and META failure clustering see it.
+                try:
+                    from backend.persistence.events import write_event
+                    from backend.workers.base import EventType, HiveEvent
+                    await write_event(HiveEvent(
+                        type=EventType.AGENT_ERROR, agent_id=agent_id,
+                        session_id=session_id, origin="infrastructure",
+                        error=f"worktree creation failed — subtask dropped: {exc}",
+                    ))
+                except Exception as write_exc:  # noqa: BLE001
+                    logger.warning("Drop-event write failed: %s", write_exc)
                 return None
 
         await create_agent(
@@ -114,6 +130,7 @@ async def spawn_agents(
             mcp_servers=list(getattr(member, "mcp_servers", []) or []),
             wave=int(getattr(member, "wave", 0) or 0),
             predecessor_note=str(getattr(member, "predecessor_note", "") or ""),
+            fallback=str(getattr(member, "fallback", "haiku") or "haiku"),
         )
 
     results = await asyncio.gather(*[_create_one(m, i) for m, i in all_members])

@@ -24,6 +24,21 @@ logger = logging.getLogger(__name__)
 
 WORKTREES_ROOT = HIVE_DIR / "worktrees"
 
+# E0.3 golden finding: concurrent create() calls raced on repo
+# initialization (git init + first commit) and on `git worktree add`
+# (both mutate .git) — one agent's worktree creation died on index.lock
+# and its entire subtask was silently dropped (the flask-todo Builder).
+# One lock per resolved project path serializes the git-mutating window;
+# worktree creation is ~100ms, so this costs nothing at swarm scale.
+_project_locks: dict[str, asyncio.Lock] = {}
+
+
+def _project_lock(project_path: Path) -> asyncio.Lock:
+    key = str(project_path)
+    if key not in _project_locks:
+        _project_locks[key] = asyncio.Lock()
+    return _project_locks[key]
+
 
 class WorktreeManager:
     """Creates and manages git worktrees for agent isolation."""
@@ -109,24 +124,25 @@ class WorktreeManager:
 
     async def create(self, agent_id: str, branch_name: str | None = None) -> Path:
         """Create a git worktree for an agent. Returns the worktree path."""
-        await self.ensure_git_repo()
+        async with _project_lock(self.project_path):
+            await self.ensure_git_repo()
 
-        wt_path = self.worktree_path(agent_id)
-        wt_path.parent.mkdir(parents=True, exist_ok=True)
+            wt_path = self.worktree_path(agent_id)
+            wt_path.parent.mkdir(parents=True, exist_ok=True)
 
-        branch = branch_name or f"hive/{self.session_id}/{agent_id}"
+            branch = branch_name or f"hive/{self.session_id}/{agent_id}"
 
-        # Remove stale worktree at this path if it exists
-        if wt_path.exists():
-            logger.warning("Stale worktree at %s — removing", wt_path)
-            await self.remove(agent_id)
+            # Remove stale worktree at this path if it exists
+            if wt_path.exists():
+                logger.warning("Stale worktree at %s — removing", wt_path)
+                await self.remove(agent_id)
 
-        logger.info("Creating worktree for agent=%s at %s (branch=%s)", agent_id, wt_path, branch)
-        await _run(
-            "git", "worktree", "add", "-b", branch, str(wt_path),
-            cwd=self.project_path,
-        )
-        return wt_path
+            logger.info("Creating worktree for agent=%s at %s (branch=%s)", agent_id, wt_path, branch)
+            await _run(
+                "git", "worktree", "add", "-b", branch, str(wt_path),
+                cwd=self.project_path,
+            )
+            return wt_path
 
     async def remove(self, agent_id: str) -> None:
         """Remove a worktree and prune the reference."""

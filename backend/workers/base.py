@@ -25,6 +25,8 @@ class EventType(StrEnum):
     LESSON_NONE = "lesson/none"
     COMPACTION = "compaction/state"
     ESTIMATE_ACTUAL = "estimate/actual"
+    # E2: a local worker fell back to a Claude tier (VRAM headroom gone).
+    MODEL_FALLBACK = "model/fallback"
 
     # Content
     TEXT_DELTA = "text/delta"

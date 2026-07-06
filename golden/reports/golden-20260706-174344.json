@@ -1,0 +1,104 @@
+{
+  "timestamp": "20260706-174344",
+  "results": [
+    {
+      "name": "ambiguous-task",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 7.4,
+      "cost_usd": 0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "agents_spawned": 0,
+      "session_id": "gaba73c2"
+    },
+    {
+      "name": "docs-only",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 72.2,
+      "cost_usd": 0.065,
+      "input_tokens": 46,
+      "output_tokens": 4249,
+      "agents_spawned": 1,
+      "session_id": "g3e39252"
+    },
+    {
+      "name": "flask-todo-api",
+      "success": false,
+      "failures": [
+        "file_exists: app.py missing",
+        "file_contains: app.py missing",
+        "command_succeeds: `python3 -m pytest -q` exited 2:  in <module>\n    from app import app as flask_app\nE   ModuleNotFoundError: No module named 'app'\n=========================== short test summary info ============================\nERROR tests/test_app.py\n!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!\n1 error in 0.06s\n"
+      ],
+      "wall_seconds": 105.5,
+      "cost_usd": 0.2424,
+      "input_tokens": 34,
+      "output_tokens": 8111,
+      "agents_spawned": 1,
+      "session_id": "g24dc0c7"
+    },
+    {
+      "name": "lessons-injection",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 106.8,
+      "cost_usd": 0.2149,
+      "input_tokens": 32,
+      "output_tokens": 9178,
+      "agents_spawned": 1,
+      "session_id": "g811db42"
+    },
+    {
+      "name": "multi-file-python",
+      "success": false,
+      "failures": [
+        "command_succeeds: `python3 -m pytest -q` exited 5: \nno tests ran in 0.00s\n"
+      ],
+      "wall_seconds": 82.5,
+      "cost_usd": 0.2078,
+      "input_tokens": 34,
+      "output_tokens": 6653,
+      "agents_spawned": 1,
+      "session_id": "g15c7e6c"
+    },
+    {
+      "name": "palette-playwright",
+      "success": false,
+      "failures": [
+        "file_exists: screenshot.png missing"
+      ],
+      "wall_seconds": 128.0,
+      "cost_usd": 0.6153,
+      "input_tokens": 66,
+      "output_tokens": 11242,
+      "agents_spawned": 2,
+      "session_id": "gcb494bb"
+    },
+    {
+      "name": "snake-game",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 95.3,
+      "cost_usd": 0.232,
+      "input_tokens": 26,
+      "output_tokens": 8755,
+      "agents_spawned": 1,
+      "session_id": "gc388318"
+    },
+    {
+      "name": "tiny-fix",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 34.2,
+      "cost_usd": 0.0545,
+      "input_tokens": 46,
+      "output_tokens": 2357,
+      "agents_spawned": 1,
+      "session_id": "g8093ad9"
+    }
+  ],
+  "total_cost_usd": 1.6319,
+  "passed": 5,
+  "total": 8
+}

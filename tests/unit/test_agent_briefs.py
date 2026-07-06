@@ -179,6 +179,31 @@ async def test_perspective_diversity_same_subtask_still_works() -> None:
 
 
 @pytest.mark.asyncio
+async def test_concurrent_worktree_creation_in_fresh_repo(tmp_path) -> None:
+    """E0.3 golden finding: parallel create() calls raced on git init /
+    first commit / worktree add — the flask-todo Builder's worktree died
+    on index.lock and its subtask was silently dropped."""
+    from backend.worktrees.manager import WorktreeManager
+    import asyncio
+
+    project = tmp_path / "proj"
+    project.mkdir()
+    (project / "existing.txt").write_text("pre-existing, uncommitted\n")
+
+    manager = WorktreeManager(session_id="race-test", project_path=str(project))
+    try:
+        paths = await asyncio.gather(*[
+            manager.create(agent_id=f"agent-{i}") for i in range(4)
+        ])
+        assert all(p.exists() for p in paths)
+        # The pre-existing file was adopted by the init commit, so every
+        # worktree sees it (the phantom-conflict fix).
+        assert all((p / "existing.txt").exists() for p in paths)
+    finally:
+        await manager.remove_session_worktrees()
+
+
+@pytest.mark.asyncio
 async def test_same_role_members_get_distinct_agent_ids(tmp_path) -> None:
     """Phase D e2e finding: two same-role single-count members collided on
     agent_id (per-member index was always 0) — the second worktree failed

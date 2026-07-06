@@ -40,6 +40,7 @@ Translator, DocReader.
 Model tiers per agent:
 - "claude:sonnet" — default for real engineering work
 - "claude:haiku"  — mechanical subtasks only (renames, boilerplate, doc tweaks)
+__LOCAL_MODELS__
 
 Return this exact JSON structure:
 {
@@ -72,7 +73,8 @@ Rules:
   merged into one agent, different-role overlaps get sequenced — plan disjoint to stay parallel.
 - `max_turns`: per-agent budget — every tool call costs a turn, so even a one-line edit takes
   ~6-8 turns (read, edit, verify, respond). 10-12 for small/mechanical subtasks, 15-20 standard,
-  30 only for large builds.
+  30 only for large builds. MCP-equipped agents (browser etc.) burn turns fast — give them 25-30
+  (the golden palette Tester died at the finish line on turns and its work was lost).
 - passive=true for Debugger only.
 - No markdown, no extra text outside the JSON.
 
@@ -116,6 +118,7 @@ class TeamMember:
         mcp_servers: list[str] | None = None,
         wave: int = 0,
         predecessor_note: str = "",
+        fallback: str = "haiku",
     ) -> None:
         self.role = role
         self.model = model
@@ -125,6 +128,8 @@ class TeamMember:
         self.files_hint = files_hint
         self.max_turns = max_turns
         self.mcp_servers = mcp_servers or []
+        # E2: Claude tier used when a local model can't spawn (VRAM full).
+        self.fallback = fallback
         # D4: execution wave — wave>0 runs after all lower waves complete
         # (file-overlap sequencing). predecessor_note tells the agent whose
         # branch to look at.
@@ -187,7 +192,10 @@ async def orchestrate(
     Falls back to /tmp if the path is missing/inaccessible (e.g. tests).
     """
     worker = ClaudeCLIWorker()
-    prompt = _build_prompt(message, history or [], state_doc=state_doc)
+    prompt = _build_prompt(
+        message, history or [], state_doc=state_doc,
+        local_digest=await _local_models_digest(),
+    )
 
     cwd = "/tmp"
     if project_path:
@@ -265,8 +273,47 @@ async def orchestrate(
     return _parse_decision(final_text if final_text is not None else "".join(chunks))
 
 
-def _build_prompt(message: str, history: list[dict], state_doc: str = "") -> str:
-    parts = [_INSTRUCTIONS, ""]
+async def _local_models_digest() -> str:
+    """Availability-checked local pool for the planner prompt (E2).
+
+    Rebuilt every plan turn — VRAM headroom changes as workers spawn and
+    the user games/renders. Empty pool → empty string → the planner never
+    hears about local models (Claude-only degradation)."""
+    try:
+        from backend.models_local import discover_local_models
+
+        models = [m for m in await discover_local_models() if m.available]
+    except Exception as exc:  # noqa: BLE001 — planning must survive discovery
+        logger.debug("Local model digest skipped: %s", exc)
+        return ""
+    if not models:
+        return ""
+    lines = ["Local models (FREE — cost $0, run on the user's own GPUs):"]
+    lines += [
+        f'- "local:{m.name}" — {m.tier_equivalence}; good for: '
+        f"{', '.join(sorted(m.capabilities))}"
+        for m in models
+    ]
+    lines += [
+        "Routing guidance:",
+        "- Local models cost $0 — prefer them for mechanical edits, boilerplate,",
+        "  renames, config changes, test scaffolding from clear specs, doc updates,",
+        "  and high-volume repetitive subtasks.",
+        "- Claude tiers for: novel logic, cross-file reasoning, debugging",
+        "  unfamiliar failures, anything ambiguous or exploratory.",
+        "- When uncertain, split: a local drafter + a Claude reviewer subtask is",
+        "  often cheaper than one big Claude worker.",
+        "- Subtasks with MCP servers (browser etc.) stay on Claude tiers —",
+        "  local models cannot drive tools.",
+        '- A local agent may carry "fallback": "haiku" (used automatically when',
+        "  VRAM headroom vanishes at spawn time).",
+    ]
+    return "\n".join(lines)
+
+
+def _build_prompt(message: str, history: list[dict], state_doc: str = "",
+                  local_digest: str = "") -> str:
+    parts = [_INSTRUCTIONS.replace("__LOCAL_MODELS__", local_digest), ""]
     if state_doc:
         # D3: the compact CURRENT STATE doc replaces the turns that were
         # pruned by compaction — it comes BEFORE the remaining raw turns.
@@ -350,6 +397,12 @@ def _parse_composition_dict(data: dict) -> TeamComposition:
         role = member.get("role", "Builder")
         model = member.get("model", DEFAULT_MODEL)
         count = max(1, int(member.get("count", 1)))
+        # E2: "local:<name>" is the planner-facing spelling; the worker
+        # backend convention is "ollama:<name>" — normalize here so the
+        # spawner's startswith("claude:") routing just works.
+        if model.startswith("local:"):
+            model = "ollama:" + model[len("local:"):]
+        fallback = str(member.get("fallback") or "haiku").strip() or "haiku"
         passive = bool(member.get("passive", False))
         subtask = (member.get("subtask") or "").strip()
         files_hint = member.get("files_hint") or None
@@ -379,7 +432,7 @@ def _parse_composition_dict(data: dict) -> TeamComposition:
             team.append(TeamMember(
                 role=role, model=model, count=1, passive=passive,
                 subtask=subtask, files_hint=files_hint, max_turns=max_turns,
-                mcp_servers=list(mcp_servers),
+                mcp_servers=list(mcp_servers), fallback=fallback,
             ))
 
     _resolve_file_overlaps(team)
