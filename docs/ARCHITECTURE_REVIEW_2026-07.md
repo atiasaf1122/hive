@@ -595,6 +595,56 @@ navigational gain. Don't.
 
 # Progress log (newest first)
 
+## 2026-07-07 — Q&A audit: Plugins & Skills pages, model labels, stale Windows desktop copy
+
+Four questions asked and answered in a working session (no code changes yet —
+findings + recommendations recorded here for follow-up).
+
+**Q: Is the Plugins page needed / functional?** Half-functional, and its
+install path is disconnected from the live pipeline:
+- Discover works — live probe returned 31 items, but both remote sources
+  (official, smithery) were unreachable → offline curated cache + amber banner.
+- **Install is misleading**: it writes `mcpServers` into `~/.claude.json`,
+  which HIVE agents never read — workers run `--mcp-config <per-agent file>
+  --strict-mcp-config` (claude_cli.py), so agent MCP equipment comes solely
+  from the curated code catalog (`backend/mcp/catalog.py`). The button
+  actually configures the user's *interactive* claude CLI, while the page
+  blurb claims it extends "the orchestrator and its agents".
+- Installed tab is amnesiac (`installedIds` is in-memory React state, no
+  backend list endpoint; the DELETE/uninstall endpoint exists but no UI calls
+  it). Models tab is a placeholder referencing parked Phase 9D.
+- **Verdict: not needed as-is** — keep as discovery-only browser (fix blurb,
+  relabel Install) or delete the page.
+
+**Q: Is the Skills page needed / functional?** Yes on both counts:
+- Search works live (30 results; clawhub + cookbook down, GitHub community
+  source carried it).
+- Install is real: fetches/synthesizes SKILL.md → `~/.hive/skills/<slug>/` →
+  `import_skill` → the SAME registry whose `hybrid_search` the orchestrator
+  (graph.py) uses to inject top-3 skills into agent briefs. Solid SSRF
+  hardening on the fetch path.
+- Same in-memory installed-list flaw as Plugins (the "thin endpoint in 9D"
+  promised in a code comment never shipped — 9D was parked).
+- **Verdict: keep** — it's the only UI for growing the skills registry.
+  Worthwhile fix for both pages: a small GET endpoint listing installed
+  skills / configured MCP servers so Installed views survive reloads.
+
+**Q: Why does the composer say "Claude Opus 4.7" — where are 4.8/Sonnet 5?**
+The running desktop app is a **stale fork**: `C:\Users\The One\hive-desktop`
+has drifted from the repo's `desktop/` — old "Opus 4.7" labels, still ships
+Phase-A-deleted components (SecurityPanel, AuditLogViewer → dead endpoints,
+those screens 404), missing everything newer (ErrorBoundary, TrajectoryView,
+LessonsPanel, AgentDrillDown…). Cosmetically wrong only for models: the UI
+sends `claude:opus` and the CLI resolves the alias to the latest Opus, so
+swarms already run Opus 4.8 / Sonnet 5 / Haiku 4.5 (current lineup;
+`backend/models.py` is correct). **Fix: sync the Windows copy from the repo's
+`desktop/`** — pending user go-ahead.
+
+**Q: Why "400 project_path does not exist: /mnt/c/.../hive test/New folder"?**
+Correct validation, stale target: the Windows→WSL path translation worked,
+but the folder was renamed to `1` after the picker grabbed it as "New
+folder". Re-picking the folder under its current name resolves it.
+
 ## 2026-07-07 — One-click desktop launcher (Windows shortcuts)
 
 QoL for daily use: double-clickable **HIVE** / **Stop HIVE** shortcuts on the
