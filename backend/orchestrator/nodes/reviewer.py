@@ -13,8 +13,11 @@ LLM call.
 """
 from __future__ import annotations
 
+import json
 import logging
+import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from backend.models import OPUS_MODEL
 from backend.orchestrator.nodes.spawner import SpawnedAgent, SpawnPlan
@@ -186,6 +189,175 @@ async def llm_review(
     except Exception as exc:  # noqa: BLE001
         logger.warning("LLM review crashed: %s", exc)
         return [f"LLM review crashed: {exc}"]
+
+
+# ── F3: salvage review — don't discard a failed agent's committed work ───────
+
+@dataclass
+class SalvageVerdict:
+    agent_id: str
+    branch: str
+    action: str          # "merge" | "discard" | "conflict"
+    reasoning: str
+    commits: int
+
+
+_SALVAGE_MIN_CHANGED_LINES = 5    # don't pay Opus to review a trivial branch
+
+
+async def salvage_failed_agents(
+    plan: SpawnPlan,
+    results: dict[str, AgentResult],
+    session_id: str,
+    main_branch: str = "main",
+    model: str = OPUS_MODEL,
+) -> list[SalvageVerdict]:
+    """For each agent that FAILED but left committed work on its branch, ask
+    Opus whether to merge or discard it, then act. Branches survive worktree
+    removal (shared object store), so this runs after review_and_merge.
+
+    Cost-guarded: only branches with ≥1 commit AND a non-trivial diff pay
+    for an Opus call (the palette Tester died at the finish line in D and
+    its finished work was silently dropped — this is the fix).
+    """
+    from backend.worktrees.manager import _run as _git
+
+    project = Path(plan.project_path)
+    verdicts: list[SalvageVerdict] = []
+
+    for agent in plan.active_agents:
+        result = results.get(agent.agent_id)
+        if result is not None and result["status"] != "failed":
+            continue
+        branch = f"hive/{plan.session_id}/{agent.agent_id}"
+        try:
+            if not (await _git("git", "rev-parse", "--verify", branch, cwd=project)).strip():
+                continue
+        except RuntimeError:
+            continue    # branch doesn't exist — nothing to salvage
+        try:
+            commits = int((await _git(
+                "git", "rev-list", "--count", f"{main_branch}..{branch}",
+                cwd=project)).strip() or "0")
+        except RuntimeError:
+            commits = 0
+        if commits < 1:
+            continue
+        try:
+            stat = await _git("git", "diff", "--shortstat",
+                              f"{main_branch}...{branch}", cwd=project)
+        except RuntimeError:
+            stat = ""
+        changed = sum(int(n) for n in re.findall(r"(\d+) (?:insertion|deletion)", stat))
+        if changed < _SALVAGE_MIN_CHANGED_LINES:
+            logger.info("Salvage skipped for %s — trivial branch (%d lines)",
+                        agent.agent_id, changed)
+            continue
+
+        error = (result or {}).get("error") or "unknown failure"
+        verdict = await _salvage_one(
+            agent, branch, commits, error, session_id, project, main_branch, model)
+        verdicts.append(verdict)
+    return verdicts
+
+
+async def _salvage_one(
+    agent: SpawnedAgent, branch: str, commits: int, error: str,
+    session_id: str, project: Path, main_branch: str, model: str,
+) -> SalvageVerdict:
+    from backend.workers.base import EventType, WorkerConfig
+    from backend.workers.claude_cli import ClaudeCLIWorker
+    from backend.worktrees.manager import WorktreeManager, _run as _git
+
+    diff = ""
+    try:
+        diff = await _git("git", "diff", f"{main_branch}...{branch}", cwd=project)
+    except RuntimeError:
+        pass
+
+    prompt = (
+        f"You are the HIVE Reviewer performing a SALVAGE review. Agent "
+        f"{agent.agent_id} ({agent.role}) FAILED: {error[:400]}\n\n"
+        f"But its branch `{branch}` contains {commits} commit(s) of work. "
+        f"Decide whether that work is worth keeping. Diff vs {main_branch}:\n"
+        f"```diff\n{diff[:8000]}\n```\n\n"
+        f"Reply with ONE JSON object, nothing else:\n"
+        f'{{"action": "merge" | "discard", "reason": "one or two lines"}}\n'
+        f"Choose merge if the work is correct/useful as-is (a later validation "
+        f"pass still runs). Choose discard if it's broken, empty, or unsafe."
+    )
+    config = WorkerConfig(
+        agent_id=f"salvage-{agent.agent_id}", session_id=session_id,
+        model=model, worktree_path=str(project), max_turns=4,
+    )
+    action, reasoning = "discard", "salvage review produced no verdict"
+    try:
+        worker = ClaudeCLIWorker()
+        chunks: list[str] = []
+        final: str | None = None
+        async for event in worker.run(prompt, config):
+            if event.type == EventType.TEXT_DELTA and event.text:
+                chunks.append(event.text)
+            elif event.type == EventType.TEXT_DONE and event.text:
+                final = event.text
+            elif event.type == EventType.COST:
+                try:
+                    from backend.persistence.events import write_cost
+                    await write_cost(session_id, config.agent_id,
+                                     event.input_tokens or 0,
+                                     event.output_tokens or 0,
+                                     event.cost_usd or 0.0)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Salvage cost write failed: %s", exc)
+            elif event.type == EventType.AGENT_ERROR:
+                logger.warning("Salvage review errored: %s", event.error)
+        raw = (final if final is not None else "".join(chunks)).strip()
+        parsed = _first_json(raw)
+        if parsed:
+            action = "merge" if str(parsed.get("action")).lower() == "merge" else "discard"
+            reasoning = str(parsed.get("reason") or "")[:400]
+    except Exception as exc:  # noqa: BLE001 — a crash defaults to discard
+        logger.warning("Salvage review crashed for %s: %s", agent.agent_id, exc)
+
+    final_action = action
+    if action == "merge":
+        # Same merge path as a live agent — conflicts surface as conflicts.
+        manager = WorktreeManager(session_id=session_id, project_path=str(project))
+        merge = await manager.merge_to_main(agent_id=agent.agent_id, main_branch=main_branch)
+        if not merge.success:
+            final_action = "conflict"
+            reasoning = f"salvage merge conflicted: {merge.conflict_files}; {reasoning}"
+
+    try:
+        from backend.persistence.events import write_event
+        from backend.workers.base import HiveEvent
+        await write_event(HiveEvent(
+            type=EventType.SALVAGE_REVIEW, agent_id=agent.agent_id,
+            session_id=session_id,
+            raw_payload={"action": final_action, "reasoning": reasoning,
+                         "commits": commits, "branch": branch,
+                         "failure": error[:200]},
+        ))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Salvage event write failed: %s", exc)
+
+    logger.info("Salvage %s for %s: %s", final_action, agent.agent_id, reasoning[:80])
+    return SalvageVerdict(agent_id=agent.agent_id, branch=branch,
+                          action=final_action, reasoning=reasoning, commits=commits)
+
+
+_SALVAGE_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+
+def _first_json(text: str) -> dict | None:
+    match = _SALVAGE_JSON_RE.search(text or "")
+    if not match:
+        return None
+    try:
+        out = json.loads(match.group(0))
+        return out if isinstance(out, dict) else None
+    except json.JSONDecodeError:
+        return None
 
 
 def summarize_results(results: dict[str, AgentResult], report: ReviewReport) -> str:

@@ -659,6 +659,25 @@ async def review_node(state: GraphState) -> dict:
         except Exception as exc:  # noqa: BLE001
             logger.debug("Event write failed: %s", exc)
 
+    # F3: salvage review — a failed agent's committed branch isn't discarded
+    # silently (the palette Tester died at the finish line in D). Opus judges
+    # merge-vs-discard; a merge goes through the normal merge path. Cost-
+    # guarded inside (≥1 commit + non-trivial diff).
+    if report.failed_agents:
+        from backend.orchestrator.nodes.reviewer import salvage_failed_agents
+        try:
+            verdicts = await salvage_failed_agents(
+                plan, results, state["session_id"])
+            for v in verdicts:
+                report.notes.append(
+                    f"salvage {v.action} — {v.agent_id} ({v.commits} commit(s)): {v.reasoning}")
+                if v.action == "merge":
+                    # A salvaged branch merged cleanly — it's no longer a
+                    # dropped failure for the summary's purposes.
+                    report.notes.append(f"  ↳ {v.branch} merged from salvage")
+        except Exception as exc:  # noqa: BLE001 — salvage must never fail the turn
+            logger.warning("Salvage review failed: %s", exc)
+
     total_in = sum(r["input_tokens"] for r in results.values())
     total_out = sum(r["output_tokens"] for r in results.values())
     total_cost = sum(r["cost_usd"] for r in results.values())
