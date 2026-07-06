@@ -37,7 +37,8 @@ export function PermissionDialog({ item, onClose, onConfirm }: Props) {
         <div className="p-5 space-y-3 text-sm">
           <p className="text-ink">
             <span className="font-medium">{item.name}</span> will be added to
-            Claude's MCP config and can access:
+            your interactive Claude CLI config (~/.claude.json) — not to HIVE
+            agents — and can access:
           </p>
 
           {item.permissions.length === 0 ? (

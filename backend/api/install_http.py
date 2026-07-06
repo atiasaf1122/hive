@@ -44,7 +44,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.skills.registry import SKILLS_ROOT, import_skill
+from backend.skills.registry import SKILLS_ROOT, import_skill, list_skills
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/registries")
@@ -208,6 +208,55 @@ def _validate_install_url(url: str) -> None:
                 400,
                 f"Install host {host!r} resolves to a non-public address ({ip}); refusing.",
             )
+
+
+# ── Installed listings ────────────────────────────────────────────────────────
+# The Skills/Plugins pages' "Installed" views used to live only in React
+# state and reset on every reload (the "thin endpoint in 9D" that never
+# shipped). These are those endpoints. IDs are name slugs — the same
+# _slugify/_safe_slug transform both install paths use — so the frontend
+# can match registry search items by slugifying item.name.
+
+
+@router.get("/skills/installed")
+async def skills_installed() -> dict:
+    """List skills registered in the local registry (~/.hive/skills + DB)."""
+    skills = await list_skills()
+    return {
+        "items": [
+            {
+                "id": s.id,
+                "name": s.name,
+                "description": s.description,
+                "tags": s.tags,
+                "version": s.version,
+            }
+            for s in skills
+        ]
+    }
+
+
+@router.get("/mcp/installed")
+async def mcp_installed() -> dict:
+    """List MCP servers configured in the user's Claude config.
+
+    These equip the user's *interactive* claude CLI only — HIVE agents run
+    with --strict-mcp-config and get servers from backend/mcp/catalog.py.
+    """
+    config_path = _claude_config_path()
+    servers = _read_claude_config(config_path).get("mcpServers", {})
+    return {
+        "items": [
+            {
+                "key": key,
+                "command": entry.get("command", ""),
+                "args": entry.get("args", []),
+            }
+            for key, entry in servers.items()
+            if isinstance(entry, dict)
+        ],
+        "config_path": str(config_path),
+    }
 
 
 # ── MCP install ──────────────────────────────────────────────────────────────

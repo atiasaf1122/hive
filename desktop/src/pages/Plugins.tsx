@@ -1,10 +1,15 @@
 /**
- * Plugins — MCP servers + integrations + (later) local Ollama models.
+ * Plugins — a discovery browser for MCP servers.
  *
- *   Hero with HIVE ↔ MCP ↔ tool flow
- *   Top tabs: Installed · Discover · Models
+ * Discovery-only by design: "Add to CLI" writes the server into the user's
+ * ~/.claude.json for their *interactive* claude sessions. HIVE agents never
+ * read that file — they run with --strict-mcp-config and get their MCP
+ * equipment from the curated catalog (backend/mcp/catalog.py), assigned by
+ * the planner.
+ *
+ *   Top tabs: Installed · Discover
  *   Discover: category sidebar + grid
- *   Permission dialog before install
+ *   Permission dialog before adding
  */
 import { IconPlug, IconRefresh, IconSearch } from '@tabler/icons-react'
 import clsx from 'clsx'
@@ -14,8 +19,9 @@ import { PluginCard, type MCPItem } from '../components/plugins/PluginCard'
 import { FlowStrip, HeroHeader } from '../components/ui/HeroHeader'
 import { Skeleton } from '../components/ui/Skeleton'
 import { api } from '../lib/api'
+import { slugify } from '../lib/slug'
 
-type Tab = 'installed' | 'discover' | 'models'
+type Tab = 'installed' | 'discover'
 
 interface MCPResponse {
   items: MCPItem[]
@@ -36,6 +42,19 @@ export function Plugins() {
   const [pendingInstall, setPendingInstall] = useState<MCPItem | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const requestIdRef = useRef(0)
+
+  // Hydrate the Installed tab from the backend so it survives reloads.
+  // Keys in ~/.claude.json mcpServers are name slugs (backend _safe_slug).
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await api.get<{ items: { key: string }[] }>('/api/registries/mcp/installed')
+        setInstalledIds(new Set(res.items.map((i) => i.key)))
+      } catch {
+        // Backend down or old backend without the endpoint — tab stays empty.
+      }
+    })()
+  }, [])
 
   const load = useCallback(async (force = false) => {
     const myId = ++requestIdRef.current
@@ -64,34 +83,35 @@ export function Plugins() {
 
   const visibleItems = useMemo(() => {
     if (!data) return []
-    if (tab === 'installed') return data.items.filter((i) => installedIds.has(i.id))
-    if (tab === 'discover') return data.items
-    return [] // models tab handled separately below
+    if (tab === 'installed') return data.items.filter((i) => installedIds.has(slugify(i.name)))
+    return data.items
   }, [data, tab, installedIds])
 
   async function confirmInstall(item: MCPItem) {
     try {
-      const res = await api.post<{ ok: boolean; command: string; config_path: string }>(
-        '/api/registries/mcp/install',
-        {
-          id: item.id,
-          name: item.name,
-          install: item.install,
-          permissions: item.permissions,
-        },
-      )
+      const res = await api.post<{
+        ok: boolean
+        command: string
+        config_path: string
+        config_key: string
+      }>('/api/registries/mcp/install', {
+        id: item.id,
+        name: item.name,
+        install: item.install,
+        permissions: item.permissions,
+      })
       if (res.ok) {
-        setInstalledIds((prev) => new Set(prev).add(item.id))
+        setInstalledIds((prev) => new Set(prev).add(res.config_key))
         if (res.command && !res.command.startsWith('#')) {
           // Surface the runtime-install command the user still needs to run.
           alert(
-            `Added to Claude config (${res.config_path}).\n\n` +
+            `Added to your Claude CLI config (${res.config_path}).\n\n` +
               `Run this once to install the runtime:\n\n  ${res.command}`,
           )
         }
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Install failed')
+      setError(e instanceof Error ? e.message : 'Add to CLI failed')
     }
   }
 
@@ -101,12 +121,12 @@ export function Plugins() {
         <HeroHeader
           icon={IconPlug}
           title="Plugins"
-          blurb="Model Context Protocol servers extend the orchestrator and its agents with external tools — file systems, databases, image generation, web search. Discover and install with a permission gate every time."
-          flow={<FlowStrip steps={['HIVE', 'MCP server', 'external tool']} />}
+          blurb="A discovery browser for Model Context Protocol servers. Adding one here equips YOUR interactive claude CLI (~/.claude.json) — HIVE agents get their MCP equipment from the curated catalog (playwright, github, context7, filesystem), assigned per-task by the planner."
+          flow={<FlowStrip steps={['browse', 'add to CLI', 'your claude sessions']} />}
           stats={
             data ? (
               <span>
-                {data.items.length} available · {installedIds.size} running · {' '}
+                {data.items.length} available · {installedIds.size} in your CLI config · {' '}
                 {data.fallback ? 'offline cache' : 'live'}
               </span>
             ) : null
@@ -126,7 +146,7 @@ export function Plugins() {
 
         {/* Top tab bar */}
         <div className="inline-flex items-center bg-surface-2 border border-line rounded-full p-0.5 text-xs">
-          {(['installed', 'discover', 'models'] as Tab[]).map((t) => (
+          {(['installed', 'discover'] as Tab[]).map((t) => (
             <button
               key={t}
               type="button"
@@ -146,11 +166,8 @@ export function Plugins() {
           ))}
         </div>
 
-        {tab === 'models' ? (
-          <ModelsTabPlaceholder />
-        ) : (
-          <div className="grid grid-cols-[180px_1fr] gap-6">
-            <aside>
+        <div className="grid grid-cols-[180px_1fr] gap-6">
+          <aside>
               <div className="text-xs text-ink-muted mb-2">Categories</div>
               <CategoryFilter
                 categories={['all', ...(data?.categories ?? [])]}
@@ -192,8 +209,8 @@ export function Plugins() {
               ) : visibleItems.length === 0 ? (
                 <div className="card p-8 text-center text-sm text-ink-muted">
                   {tab === 'installed'
-                    ? 'No plugins installed yet. Switch to Discover to browse.'
-                    : 'No plugins match those filters.'}
+                    ? 'Nothing in your CLI config yet. Switch to Discover to browse.'
+                    : 'No MCP servers match those filters.'}
                 </div>
               ) : (
                 <div className="grid grid-cols-2 gap-3">
@@ -201,15 +218,14 @@ export function Plugins() {
                     <PluginCard
                       key={item.id}
                       item={item}
-                      installed={installedIds.has(item.id)}
+                      installed={installedIds.has(slugify(item.name))}
                       onInstall={setPendingInstall}
                     />
                   ))}
                 </div>
               )}
             </div>
-          </div>
-        )}
+        </div>
       </div>
 
       <PermissionDialog
@@ -247,20 +263,6 @@ function CategoryFilter({
           {c === 'all' ? 'All' : c}
         </button>
       ))}
-    </div>
-  )
-}
-
-function ModelsTabPlaceholder() {
-  return (
-    <div className="card p-8 text-center">
-      <div className="text-2xl mb-2">🧠</div>
-      <div className="text-sm text-ink mb-1">Local model management</div>
-      <div className="text-xs text-ink-muted max-w-md mx-auto leading-relaxed">
-        Pull, list, and remove Ollama models from inside HIVE — including
-        live VRAM monitoring. Phase 9D ships this; for now use{' '}
-        <code>ollama list</code> in a terminal.
-      </div>
     </div>
   )
 }

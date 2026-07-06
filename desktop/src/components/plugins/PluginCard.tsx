@@ -50,7 +50,7 @@ export function PluginCard({ item, installed, onInstall, onConfigure }: Props) {
             )}
             {installed && (
               <span className="text-[10px] text-accent border border-accent/40 rounded px-1.5 py-px">
-                running
+                in CLI config
               </span>
             )}
           </div>
@@ -98,7 +98,7 @@ export function PluginCard({ item, installed, onInstall, onConfigure }: Props) {
                 type="button"
                 className="btn-ghost text-xs text-ink-muted inline-flex items-center gap-1"
               >
-                <IconCircleDot size={11} className="text-emerald-500" /> running
+                <IconCircleDot size={11} className="text-emerald-500" /> added
               </button>
             </>
           ) : (
@@ -107,7 +107,7 @@ export function PluginCard({ item, installed, onInstall, onConfigure }: Props) {
               onClick={() => onInstall(item)}
               className={clsx('btn-primary text-xs inline-flex items-center gap-1')}
             >
-              <IconPlus size={13} strokeWidth={1.75} /> Install
+              <IconPlus size={13} strokeWidth={1.75} /> Add to CLI
             </button>
           )}
         </div>

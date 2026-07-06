@@ -19,6 +19,7 @@ import { SkillPreviewModal } from '../components/skills/SkillPreviewModal'
 import { FlowStrip, HeroHeader } from '../components/ui/HeroHeader'
 import { Skeleton } from '../components/ui/Skeleton'
 import { api } from '../lib/api'
+import { slugify } from '../lib/slug'
 
 type SourceFilter = 'all' | 'clawhub' | 'cookbook' | 'community' | 'installed'
 
@@ -51,6 +52,19 @@ export function Skills() {
   // earlier response is dropped because its id no longer matches.
   const requestIdRef = useRef(0)
 
+  // Hydrate installed skills from the local registry so the "Installed only"
+  // filter survives reloads. Registry skill ids are name slugs.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await api.get<{ items: { id: string }[] }>('/api/registries/skills/installed')
+        setInstalledIds(new Set(res.items.map((i) => i.id)))
+      } catch {
+        // Backend down or old backend without the endpoint — filter stays empty.
+      }
+    })()
+  }, [])
+
   const load = useCallback(async (force = false) => {
     const myId = ++requestIdRef.current
     if (force) setRefreshing(true)
@@ -79,7 +93,7 @@ export function Skills() {
 
   const items = useMemo(() => {
     if (!data) return []
-    if (filter === 'installed') return data.items.filter((i) => installedIds.has(i.id))
+    if (filter === 'installed') return data.items.filter((i) => installedIds.has(slugify(i.name)))
     return data.items
   }, [data, filter, installedIds])
 
@@ -93,15 +107,18 @@ export function Skills() {
 
   async function doInstall(skill: SkillItem) {
     try {
-      await api.post('/api/registries/skills/install', {
-        id: skill.id,
-        name: skill.name,
-        description: skill.description,
-        source: skill.source,
-        url: skill.url,
-        tags: skill.tags,
-      })
-      setInstalledIds((prev) => new Set(prev).add(skill.id))
+      const res = await api.post<{ ok: boolean; skill_id: string }>(
+        '/api/registries/skills/install',
+        {
+          id: skill.id,
+          name: skill.name,
+          description: skill.description,
+          source: skill.source,
+          url: skill.url,
+          tags: skill.tags,
+        },
+      )
+      setInstalledIds((prev) => new Set(prev).add(res.skill_id))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Install failed')
     }
@@ -190,7 +207,7 @@ export function Skills() {
               <SkillCard
                 key={s.id}
                 skill={s}
-                installed={installedIds.has(s.id)}
+                installed={installedIds.has(slugify(s.name))}
                 onPreview={setPreviewing}
                 onInstall={onInstall}
               />

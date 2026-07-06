@@ -595,6 +595,34 @@ navigational gain. Don't.
 
 # Progress log (newest first)
 
+## 2026-07-07 — Q&A audit follow-ups: Plugins discovery-only, installed-list endpoints, Windows copy synced
+
+All four recommendations from the audit entry below are now DONE:
+
+- **Plugins page → discovery-only**: blurb now says what the page is (a
+  browser for MCP servers; adding one equips YOUR interactive claude CLI via
+  ~/.claude.json — HIVE agents get equipment from the curated catalog, per
+  invariant). "Install" relabeled **"Add to CLI"** (card button, badge,
+  PermissionDialog copy all updated); placeholder Models tab (parked 9D)
+  removed.
+- **Installed-list endpoints shipped** (the "thin endpoint in 9D" that never
+  did): `GET /api/registries/skills/installed` (registry via `list_skills`)
+  and `GET /api/registries/mcp/installed` (reads mcpServers from the Claude
+  config). Both pages hydrate `installedIds` on mount, so Installed views
+  survive reloads. IDs are name slugs — the same `_slugify`/`_safe_slug`
+  transform both install paths use; new `desktop/src/lib/slug.ts` mirrors it
+  and pages match search items by `slugify(item.name)`. Install handlers now
+  use the server-returned `skill_id`/`config_key` instead of the search id.
+- **Windows desktop copy synced** from repo `desktop/` via
+  `robocopy /MIR /XD node_modules target dist` (40 files copied, 6 stale
+  extras purged — SecurityPanel/AuditLogViewer among them). Verified: src
+  trees byte-identical, no "4.7" anywhere (QuickStart shows Opus 4.8 /
+  Sonnet 5), TrajectoryView/LessonsPanel/AgentDrillDown/ErrorBoundary
+  present, `tsc --noEmit` clean on BOTH sides, backend restarted (new
+  endpoints probed live), app launched and rendered.
+- Tests: 620 → **623 passing** (3 new endpoint tests, monkeypatched config
+  path / registry — no real ~/.claude.json reads).
+
 ## 2026-07-07 — Q&A audit: Plugins & Skills pages, model labels, stale Windows desktop copy
 
 Four questions asked and answered in a working session (no code changes yet —

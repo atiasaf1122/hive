@@ -220,6 +220,65 @@ def test_mcp_list_endpoint() -> None:
         assert key in body
 
 
+def test_skills_installed_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """GET /skills/installed returns registry skills keyed by slug id."""
+    from backend.api import install_http
+    from backend.skills.registry import Skill
+
+    async def fake_list_skills():  # noqa: ANN202
+        return [
+            Skill(id="git-hygiene", name="Git Hygiene", description="d",
+                  tags=["git"], path="/tmp/x", instructions="i", version=2),
+        ]
+
+    monkeypatch.setattr(install_http, "list_skills", fake_list_skills)
+    with TestClient(app) as client:
+        resp = client.get("/api/registries/skills/installed")
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert items == [{
+        "id": "git-hygiene", "name": "Git Hygiene", "description": "d",
+        "tags": ["git"], "version": 2,
+    }]
+
+
+def test_mcp_installed_endpoint(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """GET /mcp/installed reads mcpServers from the Claude config file."""
+    import json as json_mod
+
+    from backend.api import install_http
+
+    cfg = tmp_path / "claude.json"
+    cfg.write_text(json_mod.dumps({
+        "mcpServers": {
+            "postgres-mcp": {"command": "npx", "args": ["-y", "pg-mcp"]},
+            "broken-entry": "not-a-dict",  # tolerated, skipped
+        }
+    }))
+    monkeypatch.setattr(install_http, "_claude_config_path", lambda: cfg)
+    with TestClient(app) as client:
+        resp = client.get("/api/registries/mcp/installed")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["config_path"] == str(cfg)
+    assert body["items"] == [
+        {"key": "postgres-mcp", "command": "npx", "args": ["-y", "pg-mcp"]},
+    ]
+
+
+def test_mcp_installed_endpoint_no_config(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """A missing config file yields an empty list, not an error."""
+    from backend.api import install_http
+
+    monkeypatch.setattr(
+        install_http, "_claude_config_path", lambda: tmp_path / "absent.json"
+    )
+    with TestClient(app) as client:
+        resp = client.get("/api/registries/mcp/installed")
+    assert resp.status_code == 200
+    assert resp.json()["items"] == []
+
+
 def test_usage_summary_endpoint() -> None:
     with TestClient(app) as client:
         resp = client.get("/api/usage/summary")
