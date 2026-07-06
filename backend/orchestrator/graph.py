@@ -201,6 +201,16 @@ async def orchestrator_node(state: GraphState) -> dict:
 
     composition_dict = _composition_to_dict(decision.composition)
 
+    # F4.2: surface parse-time wave resequencing (a produce/consume
+    # dependency that would have dead-locked in one wave was moved).
+    for adj in composition_dict.get("plan_adjustments") or []:
+        try:
+            await write_event(HiveEvent(
+                type=EventType.PLAN_ADJUSTED, agent_id="orchestrator",
+                session_id=state["session_id"], raw_payload=adj))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Plan-adjusted event write failed: %s", exc)
+
     # D2: plan-quality gate — score before spawn/approval so the result is
     # visible in the approval modal. One automatic revision round max; the
     # gate fails open, the user always decides. SOLO plans skip the gate:
@@ -275,11 +285,13 @@ def _composition_to_dict(composition) -> dict:
                 "passive": m.passive, "subtask": m.subtask,
                 "files_hint": m.files_hint, "max_turns": m.max_turns,
                 "mcp_servers": getattr(m, "mcp_servers", []),
+                "wave": getattr(m, "wave", 0),
             }
             for m in composition.team
         ],
         "confidence": composition.confidence,
         "rationale": composition.rationale,
+        "plan_adjustments": getattr(composition, "plan_adjustments", []),
     }
 
 
@@ -602,9 +614,77 @@ async def run_workers_node(state: GraphState) -> dict:
     results: dict[str, AgentResult] = {}
     for wave in sorted({a.wave for a in active}):
         wave_agents = [a for a in active if a.wave == wave]
-        pairs = await asyncio.gather(*[_run_one(a) for a in wave_agents])
+
+        async def _run_or_failfast(agent: SpawnedAgent) -> tuple[str, AgentResult]:
+            # F4.1: a wave>0 agent's declared inputs (files a lower-wave
+            # agent produces) must exist on a producer branch BEFORE it
+            # starts — otherwise it polls forever for a file that never
+            # arrives (the E6 20-minute hang). Cheap, deterministic.
+            miss = await _missing_consumed_input(agent, active, state)
+            if miss is not None:
+                logger.warning("Fail-fast for %s: %s", agent.agent_id, miss)
+                try:
+                    await write_event(HiveEvent(
+                        type=EventType.AGENT_ERROR, agent_id=agent.agent_id,
+                        session_id=session_id, origin="infrastructure",
+                        error=miss))
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("Fail-fast event write failed: %s", exc)
+                return agent.agent_id, AgentResult(
+                    agent_id=agent.agent_id, status="failed", text_output="",
+                    input_tokens=0, output_tokens=0, cost_usd=0.0,
+                    error=miss, failure_origin="infrastructure")
+            return await _run_one(agent)
+
+        pairs = await asyncio.gather(*[_run_or_failfast(a) for a in wave_agents])
         results.update({aid: res for aid, res in pairs})
     return {"worker_results": results}
+
+
+async def _missing_consumed_input(
+    agent: SpawnedAgent, active: list[SpawnedAgent], state: GraphState
+) -> str | None:
+    """F4.1: return a reason if a declared consumed input isn't produced.
+
+    A file in this agent's files_hint that a STRICTLY-lower-wave agent also
+    lists is a consumed input — that agent produces it. If no lower-wave
+    producer's branch actually contains the file, the agent would poll
+    forever. Returns None (proceed) when every consumed input is available,
+    or there are no declared inputs to check.
+    """
+    if agent.wave == 0 or not agent.files_hint:
+        return None
+    from backend.orchestrator.nodes.planner import _norm_hint
+    from backend.worktrees.manager import _run as _git
+
+    project = Path(state.get("project_path") or state.get("worktree_path") or "")
+    if not project or not (project / ".git").exists():
+        return None
+    my_files = {_norm_hint(h) for h in agent.files_hint}
+    for candidate in my_files:
+        producers = [
+            a for a in active
+            if a.wave < agent.wave and a.files_hint
+            and candidate in {_norm_hint(h) for h in a.files_hint}
+        ]
+        if not producers:
+            continue    # not a consumed input — this agent produces it itself
+        found = False
+        for prod in producers:
+            branch = f"hive/{state['session_id']}/{prod.agent_id}"
+            try:
+                await _git("git", "cat-file", "-e", f"{branch}:{candidate}",
+                           cwd=project)
+                found = True
+                break
+            except RuntimeError:
+                continue
+        if not found:
+            names = ", ".join(p.agent_id for p in producers)
+            return (f"consumed file {candidate!r} not present on any producer "
+                    f"branch (expected from {names}) — the producer failed or "
+                    f"never created it; the plan should sequence these")
+    return None
 
 
 async def review_node(state: GraphState) -> dict:

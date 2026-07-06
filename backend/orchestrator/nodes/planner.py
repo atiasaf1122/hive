@@ -147,10 +147,13 @@ class TeamMember:
 
 
 class TeamComposition:
-    def __init__(self, team: list[TeamMember], confidence: float, rationale: str) -> None:
+    def __init__(self, team: list[TeamMember], confidence: float, rationale: str,
+                 plan_adjustments: list[dict] | None = None) -> None:
         self.team = team
         self.confidence = confidence
         self.rationale = rationale
+        # F4.2: parse-time wave resequencing (produce/consume dependencies).
+        self.plan_adjustments = plan_adjustments or []
 
     @property
     def total_active(self) -> int:
@@ -449,12 +452,13 @@ def _parse_composition_dict(data: dict) -> TeamComposition:
                 mcp_servers=list(mcp_servers), fallback=fallback,
             ))
 
-    _resolve_file_overlaps(team)
+    adjustments = _resolve_file_overlaps(team)
 
     return TeamComposition(
         team=team,
         confidence=float(data.get("confidence", 0.7)),
         rationale=data.get("rationale", ""),
+        plan_adjustments=adjustments,
     )
 
 
@@ -482,7 +486,7 @@ def _members_overlap(m1: TeamMember, m2: TeamMember) -> list[str]:
     return hits
 
 
-def _resolve_file_overlaps(team: list[TeamMember]) -> None:
+def _resolve_file_overlaps(team: list[TeamMember]) -> list[dict]:
     """D4: no two agents may run in parallel on intersecting files_hint.
 
     Mechanical and free — the semantic sibling lives in the D2 plan gate.
@@ -490,7 +494,12 @@ def _resolve_file_overlaps(team: list[TeamMember]) -> None:
     agent doing both can't conflict with itself). Different roles →
     sequentialize: the later agent moves to the next wave and is told whose
     branch to consult. Empty/vague hints are exempt (don't fake precision).
+
+    F4.2: returns the adjustments it made so the caller can emit
+    PLAN_ADJUSTED events — a produce/consume dependency that would have
+    dead-locked in the same wave is now visibly resequenced.
     """
+    adjustments: list[dict] = []
     merged_away: set[int] = set()
     active = [i for i, m in enumerate(team) if not m.passive]
     for j_pos, j in enumerate(active):
@@ -514,6 +523,8 @@ def _resolve_file_overlaps(team: list[TeamMember]) -> None:
                 first.max_turns = max(first.max_turns or 0, second.max_turns or 0) or None
                 first.mcp_servers = sorted({*first.mcp_servers, *second.mcp_servers})
                 merged_away.add(j)
+                adjustments.append({
+                    "kind": "merged", "files": hits, "role": first.role})
                 logger.warning(
                     "Plan overlap on %s: merged duplicate %s briefs into one agent",
                     hits, first.role)
@@ -524,12 +535,17 @@ def _resolve_file_overlaps(team: list[TeamMember]) -> None:
                     f"in this turn; its commits are on its hive/<session>/ branch "
                     f"— read them (git branch -a; git show) before starting."
                 )
+                adjustments.append({
+                    "kind": "resequenced", "files": hits,
+                    "consumer": second.role, "producer": first.role,
+                    "wave": second.wave})
                 logger.warning(
                     "Plan overlap on %s: %s sequenced after %s (wave %d)",
                     hits, second.role, first.role, second.wave)
             break
     for j in sorted(merged_away, reverse=True):
         del team[j]
+    return adjustments
 
 
 def _extract_first_json_object(text: str) -> dict | None:
