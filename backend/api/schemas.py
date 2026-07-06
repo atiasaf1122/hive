@@ -34,6 +34,8 @@ class MessageRequest(BaseModel):
     text: str
     agent_id: str = "orchestrator"
     urgency: str = "question"
+    # E3: routing override from the composer mode selector.
+    task_shape: str = "auto"     # auto | solo | swarm | chat
 
 
 class AgentInfo(BaseModel):

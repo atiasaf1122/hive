@@ -4,7 +4,9 @@ prompt: |
   index.html) with a Generate button that renders 5 random color swatches,
   and VERIFY it works in a real browser: the Tester must open the built
   page with Playwright, click the Generate button, confirm 5 color
-  swatches render, and save a screenshot as evidence.
+  swatches render, and save a screenshot as evidence — the file must be
+  named exactly screenshot.png at the repo root (the success criterion
+  checks that exact path).
 success_criteria:
   - type: file_exists
     path: index.html

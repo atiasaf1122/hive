@@ -137,20 +137,81 @@ async def orchestrator_node(state: GraphState) -> dict:
             logger.info("Compacted %d turns into state doc for %s",
                         len(pruned), state["session_id"])
 
-    decision = await orchestrate(
-        message=message,
-        session_id=state["session_id"],
-        history=history[:-1],  # don't include the current message twice
-        project_path=state.get("project_path") or state.get("worktree_path"),
-        state_doc=state_doc,
+    # E3: task-shape router — trivial requests skip the swarm entirely.
+    # Explicit user choice (composer mode selector) wins over the
+    # classifier; any router failure falls through to the full path.
+    from backend.orchestrator.task_router import (
+        answer_chat,
+        build_solo_composition,
+        resolve_task_shape,
     )
+    shape = await resolve_task_shape(message, state.get("task_shape") or "auto")
+    try:
+        await write_event(HiveEvent(
+            type=EventType.TASK_SHAPE, agent_id="orchestrator",
+            session_id=state["session_id"],
+            raw_payload={"shape": shape.shape, "reasoning": shape.reasoning,
+                         "engine": shape.engine,
+                         "override": shape.engine == "override"},
+        ))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Shape event write failed: %s", exc)
+    await _emit_to_ws(state["session_id"], {
+        "type": "task_shape", "session_id": state["session_id"],
+        "shape": shape.shape, "reasoning": shape.reasoning,
+        "engine": shape.engine,
+    })
+
+    decision = None
+    solo = False
+    if shape.shape == "chat":
+        try:
+            reply = await answer_chat(message, history[:-1], state["session_id"])
+            from backend.orchestrator.nodes.planner import (
+                OrchestratorDecision,
+                TeamComposition,
+            )
+            decision = OrchestratorDecision(
+                response=reply,
+                composition=TeamComposition(team=[], confidence=1.0,
+                                            rationale="chat route"),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Chat route failed (%s) — using full planner", exc)
+    elif shape.shape == "solo":
+        from backend.orchestrator.nodes.planner import OrchestratorDecision
+        composition = await build_solo_composition(message, shape)
+        decision = OrchestratorDecision(
+            response=f"On it — routing this as a single {shape.role} task "
+                     f"({shape.reasoning}).",
+            composition=composition,
+        )
+        solo = True
+
+    if decision is None:
+        decision = await orchestrate(
+            message=message,
+            session_id=state["session_id"],
+            history=history[:-1],  # don't include the current message twice
+            project_path=state.get("project_path") or state.get("worktree_path"),
+            state_doc=state_doc,
+        )
 
     composition_dict = _composition_to_dict(decision.composition)
 
     # D2: plan-quality gate — score before spawn/approval so the result is
     # visible in the approval modal. One automatic revision round max; the
-    # gate fails open, the user always decides.
-    if decision.has_active_team:
+    # gate fails open, the user always decides. SOLO plans skip the gate:
+    # there is no decomposition to score (the subtask IS the request) —
+    # that's the point of the thin pipe.
+    if decision.has_active_team and solo:
+        from backend.orchestrator.estimator import estimate_plan
+        try:
+            composition_dict["estimate"] = await estimate_plan(composition_dict)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Estimator failed: %s", exc)
+            composition_dict["estimate"] = None
+    elif decision.has_active_team:
         from backend.orchestrator.plan_gate import score_plan
 
         check = await score_plan(composition_dict, message, session_id=state["session_id"])
@@ -442,6 +503,32 @@ def _build_agent_prompt(agent: SpawnedAgent, goal: str, pending: str) -> str:
     return "\n\n".join(parts)
 
 
+_INLINE_FILE_LIMIT = 15_000       # chars per file
+_INLINE_TOTAL_LIMIT = 45_000      # chars across all inlined files
+
+
+def _inline_hint_files(agent: SpawnedAgent) -> str:
+    """Current contents of the agent's files_hint, for tool-less workers."""
+    if not agent.files_hint or not agent.worktree_path:
+        return ""
+    root = Path(agent.worktree_path)
+    parts: list[str] = []
+    budget = _INLINE_TOTAL_LIMIT
+    for rel in agent.files_hint:
+        target = root / rel
+        if not target.is_file() or budget <= 0:
+            continue
+        try:
+            content = target.read_text(errors="replace")[:min(_INLINE_FILE_LIMIT, budget)]
+        except OSError:
+            continue
+        budget -= len(content)
+        parts.append(f"### Current content of {rel}\n```\n{content}\n```")
+    if not parts:
+        return ""
+    return "\n\n## Existing files in scope (you cannot read files — this is their current state)\n" + "\n\n".join(parts)
+
+
 async def run_workers_node(state: GraphState) -> dict:
     """Run all active agents in parallel (up to MAX_CONCURRENT at a time).
 
@@ -464,6 +551,11 @@ async def run_workers_node(state: GraphState) -> dict:
 
     async def _run_one(agent: SpawnedAgent) -> tuple[str, AgentResult]:
         prompt = _build_agent_prompt(agent, goal=goal, pending=pending)
+        # E2/E3: local workers have no Read tool — the file-block harness
+        # is write-only. Inline the current contents of the brief's
+        # files_hint so mechanical EDITS (not just creations) are possible.
+        if not agent.model.startswith("claude:"):
+            prompt += _inline_hint_files(agent)
         # D1.4: conservative lesson retrieval — a HIGH similarity bar means
         # zero injections is the normal outcome. Max 3, same-project first.
         try:
@@ -668,6 +760,8 @@ async def wait_for_user_node(state: GraphState) -> dict:
     return {
         "pending_message": text,
         "conversation_history": history,
+        # E3: per-message routing override (Auto/Solo/Swarm/Chat selector).
+        "task_shape": (response.get("task_shape") or "auto"),
         # Clear any stale turn state
         "team_composition": None,
         "approval_rejected": False,
@@ -726,6 +820,7 @@ async def run_session(
     max_turns: int = 20,
     db_path: Path = DB_PATH,
     approval_mode: str = "full-auto",
+    task_shape: str = "auto",
 ) -> AgentResult | SessionInterrupt:
     """Start a session. Returns AgentResult only if the user closes immediately;
     normally returns SessionInterrupt as the graph parks for the next message."""
@@ -767,6 +862,7 @@ async def run_session(
             "pending_message": task,
             "last_response": "",
             "user_closed": False,
+            "task_shape": task_shape,
         }
 
         thread_config = {"configurable": {"thread_id": session_id}}

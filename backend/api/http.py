@@ -229,7 +229,13 @@ async def _session_runner(
                 # If a message was queued while agents were running, use it now.
                 queue = _get_queue(session_id)
                 if queue:
-                    resume_value = {"text": queue.popleft()}
+                    queued = queue.popleft()
+                    # E3: entries are (text, task_shape) tuples; tolerate
+                    # bare strings from any pre-E3 queue producer.
+                    if isinstance(queued, tuple):
+                        resume_value = {"text": queued[0], "task_shape": queued[1]}
+                    else:
+                        resume_value = {"text": queued}
                 else:
                     loop = asyncio.get_event_loop()
                     future = loop.create_future()
@@ -688,11 +694,11 @@ async def send_message(session_id: str, req: MessageRequest) -> dict:
 
     future = _pending_inputs.get(session_id)
     if future and not future.done():
-        future.set_result({"text": text})
+        future.set_result({"text": text, "task_shape": req.task_shape})
         _pending_inputs.pop(session_id, None)
         return {"ok": True, "queued": False}
 
-    _get_queue(session_id).append(text)
+    _get_queue(session_id).append((text, req.task_shape))
 
     # No live runner (backend restarted while this session was parked) —
     # re-attach one so the queued message is actually consumed instead of

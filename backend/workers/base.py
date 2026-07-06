@@ -27,6 +27,8 @@ class EventType(StrEnum):
     ESTIMATE_ACTUAL = "estimate/actual"
     # E2: a local worker fell back to a Claude tier (VRAM headroom gone).
     MODEL_FALLBACK = "model/fallback"
+    # E3: task-shape router decision (solo/swarm/chat + reasoning).
+    TASK_SHAPE = "task/shape"
 
     # Content
     TEXT_DELTA = "text/delta"

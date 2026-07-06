@@ -53,7 +53,7 @@ def test_message_resolves_pending_input_future(client: TestClient) -> None:
         assert resp.status_code == 200
         assert resp.json() == {"ok": True, "queued": False}
         assert future.done()
-        assert future.result() == {"text": "hello orchestrator"}
+        assert future.result() == {"text": "hello orchestrator", "task_shape": "auto"}
     finally:
         loop.close()
 
@@ -69,7 +69,7 @@ def test_message_queues_when_no_pending_future(client: TestClient) -> None:
         resp = client.post("/api/sessions/s2/message", json={"text": "queued msg"})
     assert resp.status_code == 200
     assert resp.json() == {"ok": True, "queued": True, "resumed": True}
-    assert list(http_mod._get_queue("s2")) == ["queued msg"]
+    assert list(http_mod._get_queue("s2")) == [("queued msg", "auto")]
     relaunch.assert_awaited_once()
 
 

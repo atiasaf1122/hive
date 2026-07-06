@@ -1,0 +1,19 @@
+{
+  "timestamp": "20260706-175231",
+  "results": [
+    {
+      "name": "multi-file-python",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 130.3,
+      "cost_usd": 0.5017,
+      "input_tokens": 70,
+      "output_tokens": 10933,
+      "agents_spawned": 2,
+      "session_id": "gce9cdbf"
+    }
+  ],
+  "total_cost_usd": 0.5017,
+  "passed": 1,
+  "total": 1
+}

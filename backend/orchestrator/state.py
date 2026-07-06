@@ -64,6 +64,8 @@ class GraphState(TypedDict):
     pending_message: str                 # the message being processed this turn
     last_response: str                   # most recent orchestrator reply
     user_closed: bool                    # set True by wait_for_user when user closes
+    # E3: routing override for the CURRENT turn ('auto' = classifier decides).
+    task_shape: str
 
     # Final result of the most recent turn (used by API/CLI)
     result: AgentResult | None
