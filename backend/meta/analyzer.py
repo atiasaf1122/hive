@@ -120,7 +120,11 @@ async def _opus_call(prompt: str, session_id: str = "meta") -> str:
     worker = ClaudeCLIWorker()
     config = WorkerConfig(
         agent_id=f"meta-{session_id}", session_id=session_id,
-        model=OPUS_MODEL, worktree_path="/tmp", max_turns=1,
+        # E0.4: claude CLI counts every tool iteration as a turn, so
+        # max_turns=1 with an allowed Read tool killed the first live
+        # META run at num_turns=2 (same bug class as the E0.3 planner
+        # fix). 4 turns = a Read or two, then the report.
+        model=OPUS_MODEL, worktree_path="/tmp", max_turns=4,
         allowed_tools=["Read"],
     )
     chunks: list[str] = []
@@ -130,6 +134,17 @@ async def _opus_call(prompt: str, session_id: str = "meta") -> str:
             chunks.append(event.text)
         elif event.type == EventType.TEXT_DONE and event.text:
             final = event.text
+        elif event.type == EventType.COST:
+            # E0.4: META's own Opus cost was invisible to cost accounting
+            # (the same gap E0.2 closed for llm_review).
+            try:
+                from backend.persistence.events import write_cost
+                await write_cost(session_id, config.agent_id,
+                                 event.input_tokens or 0,
+                                 event.output_tokens or 0,
+                                 event.cost_usd or 0.0)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("META cost write failed: %s", exc)
         elif event.type == EventType.AGENT_ERROR:
             raise RuntimeError(f"META Opus call failed: {event.error}")
     return (final if final is not None else "".join(chunks)).strip()
@@ -147,8 +162,19 @@ async def run_meta(
         date=time.strftime("%Y-%m-%d"),
         data=json.dumps(inputs, indent=1, default=str)[:20000],
     )
+    # cost_log rows FK to sessions — give META runs a real session row so
+    # the Opus cost is actually recorded (E0.4).
+    meta_session = f"meta{int(time.time()) % 100_000_000:08d}"
+    try:
+        from backend.persistence.events import create_session
+        await create_session(meta_session, name="META analysis",
+                             path=str(project_path or ""), db_path=db_path)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("META session row create failed: %s", exc)
+
     caller = opus_caller or _opus_call
-    report = await caller(prompt)
+    report = await caller(prompt) if opus_caller else await _opus_call(
+        prompt, session_id=meta_session)
     if not report.strip():
         raise RuntimeError("META produced an empty report")
 
