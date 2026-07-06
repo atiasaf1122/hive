@@ -67,11 +67,18 @@ async def spawn_agents(
     manager = WorktreeManager(session_id=session_id, project_path=project_path)
     plan = SpawnPlan(session_id=session_id, project_path=project_path)
 
-    # Flatten team composition into individual agent slots
+    # Flatten team composition into individual agent slots. The index must
+    # be GLOBAL per role, not per-member: B1 plans emit multiple same-role
+    # members with count=1 each, and a per-member index gave them all
+    # index 0 → identical agent_ids → the second worktree creation failed
+    # and its entire subtask was silently dropped (Phase D e2e finding).
     all_members: list[tuple[TeamMember, int]] = []
+    role_counter: dict[str, int] = {}
     for member in composition.team:
-        for i in range(member.count):
-            all_members.append((member, i))
+        for _ in range(member.count):
+            idx = role_counter.get(member.role, 0)
+            role_counter[member.role] = idx + 1
+            all_members.append((member, idx))
 
     # Create worktrees concurrently (but not more than cap at once)
     semaphore = asyncio.Semaphore(max_concurrent)

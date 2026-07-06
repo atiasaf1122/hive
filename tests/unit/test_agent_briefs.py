@@ -167,3 +167,42 @@ async def test_perspective_diversity_same_subtask_still_works() -> None:
     assert len(prompts) == 2 and prompts[0] != prompts[1]
     assert "DB angle" in prompts[0] + prompts[1]
     assert "network angle" in prompts[0] + prompts[1]
+
+
+@pytest.mark.asyncio
+async def test_same_role_members_get_distinct_agent_ids(tmp_path) -> None:
+    """Phase D e2e finding: two same-role single-count members collided on
+    agent_id (per-member index was always 0) — the second worktree failed
+    and its subtask was silently dropped."""
+    from unittest.mock import AsyncMock, patch
+
+    from backend.orchestrator.nodes.planner import TeamComposition, TeamMember
+    from backend.orchestrator.nodes.spawner import spawn_agents
+
+    comp = TeamComposition(
+        team=[
+            TeamMember(role="Writer", model="claude:sonnet", subtask="a",
+                       files_hint=["a.md"]),
+            TeamMember(role="Writer", model="claude:sonnet", subtask="b",
+                       files_hint=["b.md"]),
+        ],
+        confidence=0.9, rationale="r")
+
+    created: list[str] = []
+
+    class FakeManager:
+        def __init__(self, session_id, project_path): ...
+
+        async def create(self, agent_id, branch_name=None):
+            created.append(agent_id)
+            return tmp_path / agent_id
+
+    with patch("backend.orchestrator.nodes.spawner.WorktreeManager", FakeManager), \
+         patch("backend.orchestrator.nodes.spawner.create_agent",
+               new_callable=AsyncMock):
+        plan = await spawn_agents("sess-col", "task", comp, str(tmp_path))
+
+    assert len(plan.active_agents) == 2
+    ids = [a.agent_id for a in plan.active_agents]
+    assert len(set(ids)) == 2, f"agent ids collided: {ids}"
+    assert set(created) == set(ids)

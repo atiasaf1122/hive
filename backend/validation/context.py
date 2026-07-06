@@ -53,8 +53,23 @@ async def collect_git_context(
         # 'master' unless init.defaultBranch is set, so try both — the e2e
         # dogfooding run false-negatived every claim on a master-named repo
         # when only 'main' was checked.
+        # Candidate order: explicit main_branch, the conventional names,
+        # then ANY other local branch that isn't a hive/ agent branch —
+        # repos with nonstandard defaults ('trunk', 'develop', …) false-
+        # negatived every claim (Phase D e2e finding).
+        candidates: list[str] = [main_branch, "master", "main"]
+        try:
+            branch_list = await _git(
+                worktree_path, "branch", "--format=%(refname:short)")
+            candidates.extend(
+                b.strip() for b in branch_list.splitlines()
+                if b.strip() and not b.strip().startswith("hive/")
+            )
+        except RuntimeError:
+            pass
+
         base = ""
-        for candidate in dict.fromkeys((main_branch, "master", "main")):
+        for candidate in dict.fromkeys(candidates):
             try:
                 base = (await _git(worktree_path, "merge-base", "HEAD", candidate)).strip()
                 break

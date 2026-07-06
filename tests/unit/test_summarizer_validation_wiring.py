@@ -293,7 +293,7 @@ async def _make_repo(path, branch: str) -> None:
     await git("commit", "-m", "init")
 
 
-@pytest.mark.parametrize("branch", ["main", "master"])
+@pytest.mark.parametrize("branch", ["main", "master", "trunk"])
 @pytest.mark.asyncio
 async def test_collect_git_context_finds_committed_work(tmp_path, branch) -> None:
     """The e2e dogfooding run false-negatived every validation claim on a
