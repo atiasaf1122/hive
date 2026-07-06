@@ -595,6 +595,92 @@ navigational gain. Don't.
 
 # Progress log (newest first)
 
+## 2026-07-06 — Phase G COMPLETE — HIVE graduates to v1.0.0
+
+The final close-out: every item on F's "honest next" list cleared, the
+golden suite deterministic, version 1.0.0 tagged. **620 tests passing**
+(613 → 620), 6 commits. The build (phases A→G) is complete; the system
+enters real use.
+
+- **G1 — needs_tools as a first-class classifier field** (F's live failure
+  mode). The 8B twice routed tool-reliant tasks to tool-less local
+  workers; F5's two-keyword band-aid is replaced by a real judgment: the
+  classifier now emits `needs_tools` alongside shape, and needs_tools=true
+  never routes local (browser-shaped solos get the playwright MCP). The
+  keyword scan is demoted to a validation backstop — a disagreement logs
+  CLASSIFIER_DISAGREEMENT (measuring the 8B, not silently overriding) and
+  routes to the safer Claude verdict. The palette misroute now routes by
+  field, unit-covered.
+
+- **G2 — live multi-agent salvage proof** (F's #1). Drove a real 2-agent
+  session (`g2aea7f8`): a Builder that succeeded plus a Writer engineered
+  to hit error_max_turns AFTER committing a 119-line NOTES.md. Full path
+  fired live — Writer failed → its branch had commits → SALVAGE_REVIEW
+  event → Opus verdict `merge` ("self-contained, accurate, useful as-is")
+  → merged into main through merge_to_main → salvage Opus cost logged
+  ($0.0511) → session completed with both files on main. Pre-F3 that
+  NOTES.md was silently dropped; now it's rescued.
+
+- **G3 — flask-todo de-flaked at the root.** The ~⅓ failure was a
+  coordination gap, not variance. Two fixes: (a) a top-level `contract`
+  field on the plan (concrete routes/methods/status/shapes) injected
+  VERBATIM into every teammate's prompt as a BINDING interface, so
+  producer and consumer build to the same spec instead of guessing; (b)
+  the 3× re-run exposed the deeper cause — the 8B sometimes classified
+  "API AND tests" as SOLO-local, one coder guessing both halves — so the
+  SWARM rubric now routes any must-agree-deliverables task (API+tests,
+  module+consumer, impl+doc) to swarm, never solo. Result: **3/3 in
+  isolation**, PASS in the graduation run. The golden suite has no
+  known-flaky specs left.
+
+- **G4 — the unexercised, now measured** (F's #4). Two new golden specs:
+  - **local-multifile-refactor**: rename a function across 4 coupled
+    files + tests. The local qwen3-coder:30b did it at **$0.00 in 42s**
+    (pytest green, no old-name references) — F's "OllamaWorker on
+    multi-file refactors, unproven" answered: it works, for free.
+  - **three-wave-chain**: data module → CLI → e2e test. Passed; the
+    planner correctly MERGED the two same-role build steps and
+    resequenced the Tester to wave 1 — both PLAN_ADJUSTED kinds fired
+    live. Since realistic tasks collapse to 2 waves, >2-wave EXECUTION
+    ordering is proven directly in a unit test (strict wave 0→1→2; a
+    mid-wave fail-fast doesn't block later waves).
+  - Both passed first try, so no failures to distill — the lessons store
+    stays n=2. It grows from real use, not the golden suite (which
+    doesn't trigger the close-path distiller).
+
+- **G5 — graduation.** Full 10-spec golden on hybrid: **10/10 · $2.62 ·
+  ~25 min** — a perfect run, no regressions on the original 8, both new
+  specs pass. (The $2.62 counts planner cost F0.1 made visible; pre-F
+  totals understated by ~⅓.) CLAUDE.md refreshed: per-phase
+  contributions, the containment model (worktree + guard, no OS sandbox),
+  the full routing rules (shape + needs_tools + local guidance), and an
+  "Operating HIVE" section. Version bumped to **1.0.0** across
+  pyproject/package.json/tauri.conf/Cargo; tagged **v1.0.0**.
+
+### Where the E6/F "unproven" list stands now
+- VRAM fallback — PROVEN (F0.4). RAM fallback — PROVEN (F0.4).
+- Live multi-agent salvage — PROVEN (G2).
+- OllamaWorker on multi-file refactors — PROVEN, $0 (G4).
+- Multi-wave >2 execution — PROVEN in unit (G4); realistic plans collapse
+  to 2 waves by correct merging.
+- Lessons at scale — still n=2, the one honest open item. Real use is the
+  only thing that grows it; the machinery (write/gate/retrieve/hygiene/
+  nudge) is proven, the volume isn't there yet.
+
+### Closing note
+Build phases A through G are complete. A fixed the foundation, B made the
+swarm real, C gave it hands, D gave it memory, E made it economical, F
+hardened it, G cleared the board. The system's failure modes are now
+variance-shaped (model nondeterminism), not architecture-shaped; the
+golden suite catches regressions; the learning loop is wired end-to-end
+and waiting only for real material. **HIVE 1.0.0 enters real use.**
+
+The one caveat the first real-use sessions should carry: the lessons
+store is empty of real experience (n=2, both from synthetic proofs).
+Watch whether retrieval at the 0.35 bar injects usefully or not at all as
+it fills — that threshold was measured against synthetic lessons and may
+want retuning once real ones accumulate.
+
 ## 2026-07-06 — Phase F "Hardening" COMPLETE
 
 The safety/accounting/salvage/coordination pass — took E6's own ranked

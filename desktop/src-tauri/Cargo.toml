@@ -1,6 +1,6 @@
 [package]
 name = "hive"
-version = "0.8.0"
+version = "1.0.0"
 description = "HIVE — AI agent swarm desktop app"
 authors = ["HIVE"]
 edition = "2021"

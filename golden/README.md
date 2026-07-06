@@ -106,3 +106,26 @@ The lone failure is flask-todo-api — the documented flaky coordination
 canary (generated-test logic mismatch), not F-caused. Two SOLO-routing
 gaps this run surfaced were fixed in F5 (browser tasks stay on Claude;
 tool-reliant solos get 28 turns not 12).
+
+## v1.0.0 graduation — 2026-07-06 (`golden-20260706-230751.json`)
+
+**10/10 · $2.62 · ~25 min** — all specs pass deterministically, no
+known-flaky asterisks. Two new G4 stress specs (three-wave-chain,
+local-multifile-refactor) added.
+
+| spec | result | wall | cost | agents |
+|---|---|---|---|---|
+| ambiguous-task | PASS | 38s | $0.08 | 0 |
+| docs-only | PASS | 31s | $0.00 | 1 (local) |
+| flask-todo-api | PASS | 395s | $0.70 | 2 |
+| lessons-injection | PASS | 258s | $0.16 | 2 |
+| local-multifile-refactor | PASS | 135s | $0.13 | 1 (local) |
+| multi-file-python | PASS | 186s | $0.43 | 2 |
+| palette-playwright | PASS | 110s | $0.32 | 1 |
+| snake-game | PASS | 77s | $0.00 | 1 (local) |
+| three-wave-chain | PASS | 281s | $0.80 | 2 |
+| tiny-fix | PASS | 19s | $0.00 | 1 (local) |
+
+flask-todo-api is no longer flaky: G3's contract-first briefs +
+must-agree→SWARM classification made it 3/3 in isolation and PASS here.
+The $2.62 total counts planner cost (F0.1) that pre-F runs never did.

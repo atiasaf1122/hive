@@ -67,23 +67,43 @@ session auto-resumes. `DELETE /api/sessions/{id}` is a real hard delete
 
 ---
 
-## Current state (July 2026)
+## Current state — v1.0.0 (July 2026)
 
-- Version: **0.9.0** — one source of truth: `pyproject.toml`; `backend/main.py` reads installed metadata; desktop package.json/tauri.conf match.
-- Tests: **428 passing** (`pytest -q`). Phase A deleted ~255 tests that covered removed dead code (command policy/executor suites, quality monitor).
-- Phases 0-9C complete (see HIVE_BUILD_PLAN.md history). Phase 9D (MSI packaging) parked.
-- **Phase A (fix the foundation) — DONE**: session lifecycle (PIDs/idle/resume), model registry, silent-stall fix, dead-code deletion, real session delete, version unification.
-- **Phase B (next): make the swarm real** — per-agent subtask briefs + model tiers from the planner, `--session-id`/`--resume` in ClaudeCLIWorker, wire the summarizer into review, wire validators into trust, hybrid skills search in the run loop, LLM review on merge conflict only.
-- **Phase C: MCP execution** — per-agent `--mcp-config` + `--strict-mcp-config`, capability registry (playwright/github/context7), ~50-tool budget.
-- **Phase D: META layer** — GOAL.md/ROADMAP.md per project, pattern_detector as deterministic trigger, scheduled self-analysis, human-gated self-fixes.
-- Full rationale + designs: `docs/ARCHITECTURE_REVIEW_2026-07.md`.
+Build phases A→G complete. HIVE has graduated to real use. Full rationale +
+per-phase progress log: `docs/ARCHITECTURE_REVIEW_2026-07.md`.
 
-## Known gaps (deliberate, don't "fix" casually)
+- Version: **1.0.0** — one source of truth: `pyproject.toml`; `backend/main.py` reads installed metadata; desktop package.json/tauri.conf match.
+- Tests: **620 passing** (`pytest -q`), isolated via `HIVE_DIR` temp dir (conftest); hermetic — no real model calls or `~/.hive/hive.db` pollution.
+- Golden suite: 10 specs through the REAL pipeline (`hive golden run`) — no known-flaky specs; every spec passes deterministically or its failure means something.
 
-- `run_workers_node` still sends every agent the same prompt — per-agent briefs are Phase B, not a bug to patch ad hoc.
-- The reviewer (`backend/orchestrator/nodes/reviewer.py`) is git-merge only; no LLM review yet (Phase B).
-- The summarizer (`backend/summarizer/`), validators (`backend/validation/validators.py`), hybrid skills search, and `safety/pattern_detector.py` are built but not wired into the run loop — Phases B/D wire them; don't delete.
-- Tests run against the real `~/.hive/hive.db` via the FastAPI lifespan (TestClient) — they pollute the live sessions table. Worth isolating (HIVE_DIR env) when convenient.
+### What each phase contributed
+- **A — foundation**: session lifecycle (PIDs/idle/resume from LangGraph checkpoints), model registry, real session delete, silent-stall fix, dead-code deletion.
+- **B — the swarm is real**: per-agent subtask briefs + model tiers from the planner; `--session-id`/`--resume` context reuse; summarizer + validators wired into trust; hybrid skills search; Opus `llm_review` on merge-conflict/validation-failure only.
+- **C — MCP execution**: per-agent `--mcp-config --strict-mcp-config`, curated server catalog (playwright/github/context7/filesystem), preflight doctor, per-agent equipment chips.
+- **D — META / learning**: the lessons store (grounded writes, groundedness gate, conservative retrieval, hygiene); D2 plan gate; D3 compaction; D4 file-overlap waves; D5 golden suite; D6 estimates; D7 trajectory replay; D8 on-demand META agent.
+- **E — hybrid economics**: local Ollama pool (discovery, capability catalog, VRAM manager), planner routes across it, task-shape router (SOLO/SWARM/CHAT), local meta-tasks; measured −65% cost on golden.
+- **F — hardening**: planner+all costs in cost_log; PreToolUse guard hook; Stop/SubagentStop push signals; salvage review for failed agents' committed work; producer/consumer runtime net.
+- **G — close-out**: needs_tools first-class classifier field; contract-first briefs; flask-todo de-flaked (must-agree deliverables → SWARM); multi-wave + local-multifile proven; v1.0.0.
+
+## Routing rules (how a request becomes work)
+1. **Task-shape classifier** (local 8B, else Haiku; `backend/orchestrator/task_router.py`) emits `shape` (SOLO/SWARM/CHAT), `mechanical`, and `needs_tools`.
+   - CHAT → answered in-session, zero spawns. SOLO → one worker, thin pipe (no planner/gate). SWARM → full planner decomposition.
+   - Any task naming two deliverables that must AGREE (API+tests, module+consumer) is SWARM, never solo.
+2. **needs_tools=true never routes to a local worker** (local has no tool loop — file-block harness only); browser-shaped solos get the playwright MCP. A keyword scan is a validation backstop that logs `CLASSIFIER_DISAGREEMENT` and routes to the safer (Claude) verdict.
+3. **Local (`ollama:<model>`) is preferred for mechanical, fully-specified work** (`needs_tools=false`); Claude tiers for reasoning, MCP, ambiguity. Local declares a `fallback` tier used when RAM/VRAM headroom vanishes at spawn (a `model/fallback` event fires).
+4. **Cost discipline** (invariant #7): Sonnet workhorse, Haiku mechanical/meta, Opus only for `llm_review`/salvage/META. `<backend>:<tier>` strings.
+
+## Operating HIVE
+- **Run a session**: `hive start` (backend), desktop `cd desktop && npm run tauri:dev`; send a message in a project. The composer's Auto/Solo/Swarm/Chat selector overrides the classifier.
+- **Golden regression**: `hive golden run` (all 10 specs, real cost ~$1.5–2) or `--only <spec>`. Manual, never CI.
+- **META (on-demand only)**: `hive meta` (or Settings→Lessons "Analyze & Advise") — one Opus pass over HIVE's own stats; advises, never auto-executes (~$0.34/run). The amber **"Recurring failures — run META?"** badge appears when ≥3 same-class failures cluster in 24h (`GET /api/meta/nudge`) — a nudge, not a schedule.
+- **Cost breakdown**: click the cost figure in a project's agents bar for a per-role breakdown (planner/gate/workers/summarizers/review, 🏠 $0 local rows, saved-via-local).
+
+## Known gaps (deliberate — don't "fix" casually)
+- **No OS sandbox** — containment is worktree isolation + the F1 PreToolUse guard (see invariant #3). bwrap/container is off the roadmap; revisit only if `GUARD_TRIPPED` clusters show the catastrophic list is insufficient.
+- **Lessons store is small (n≈2)** — retrieval bar (0.35) and 3-strike archive are unexercised at volume; real use grows the material.
+- **Telegram** (`backend/telegram/`) stays parked — untested against B–G changes.
+- **Distillation stays on Haiku** by default (`HIVE_LOCAL_INTERNAL=on` forces local) — the E4 quality check found the local 8B confabulated a lesson; summarization is local-first.
 
 ---
 
