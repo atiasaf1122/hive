@@ -29,6 +29,13 @@ class EventType(StrEnum):
     MODEL_FALLBACK = "model/fallback"
     # E3: task-shape router decision (solo/swarm/chat + reasoning).
     TASK_SHAPE = "task/shape"
+    # F1: the PreToolUse guard denied a catastrophic command. origin=agent
+    # (the agent chose the command) but its own class so META clusters it.
+    GUARD_TRIPPED = "guard/tripped"
+    # F3: verdict on a failed agent's committed branch.
+    SALVAGE_REVIEW = "salvage/review"
+    # F4: parse-time wave resequencing of a produce/consume dependency.
+    PLAN_ADJUSTED = "plan/adjusted"
 
     # Content
     TEXT_DELTA = "text/delta"

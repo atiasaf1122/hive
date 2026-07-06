@@ -1089,6 +1089,118 @@ def _ram_pressure() -> str | None:
     return None
 
 
+_GUARD_SCRIPT = Path(__file__).resolve().parents[2] / "backend" / "guard" / "pretooluse_guard.py"
+
+
+def _guard_log_path(agent_id: str) -> Path:
+    from backend.persistence.db import HIVE_DIR
+    return HIVE_DIR / "guard" / f"{agent_id}.jsonl"
+
+
+def _signal_log_path(agent_id: str) -> Path:
+    from backend.persistence.db import HIVE_DIR
+    return HIVE_DIR / "guard" / f"{agent_id}.signals.jsonl"
+
+
+def _write_worker_hooks(agent: SpawnedAgent) -> Path:
+    """Write <worktree>/.claude/settings.json registering the F1 guard and
+    the F2 stop signal. Returns the signal-log path.
+
+    A nested .claude/.gitignore ('*') keeps the whole directory invisible
+    to the worktree auto-commit — same reason MCP configs live outside the
+    worktree (C2), but hook settings MUST be at a discovered location.
+    """
+    import json as _json
+
+    guard_log = _guard_log_path(agent.agent_id)
+    signal_log = _signal_log_path(agent.agent_id)
+    guard_log.parent.mkdir(parents=True, exist_ok=True)
+    for stale in (guard_log, signal_log):
+        stale.unlink(missing_ok=True)
+    # Stop signal: a plain append — atomic enough for single-line writes.
+    stop_cmd = (
+        'echo "{\\"event\\":\\"stop\\",\\"ts\\":$(date +%s)}" >> ' + str(signal_log)
+    )
+    settings = {
+        "hooks": {
+            "PreToolUse": [{
+                "matcher": "Bash",
+                "hooks": [{
+                    "type": "command",
+                    "command": f"python3 {_GUARD_SCRIPT} --log {guard_log}",
+                }],
+            }],
+            "Stop": [{
+                "hooks": [{"type": "command", "command": stop_cmd}],
+            }],
+            "SubagentStop": [{
+                "hooks": [{"type": "command", "command": stop_cmd}],
+            }],
+        }
+    }
+    dot_claude = Path(agent.worktree_path) / ".claude"
+    dot_claude.mkdir(parents=True, exist_ok=True)
+    (dot_claude / ".gitignore").write_text("*\n")
+    (dot_claude / "settings.json").write_text(_json.dumps(settings, indent=2))
+    return signal_log
+
+
+_STOP_SIGNAL_GRACE_S = 15.0
+
+
+async def _watch_stop_signal(signal_path: Path, worker, agent_id: str) -> None:
+    """F2: when the Stop hook has fired but the stream stays open past the
+    grace window, the process is hung with a dead turn — reap it. Cancelled
+    (no-op) the moment the stream ends normally."""
+    try:
+        while not signal_path.exists():
+            await asyncio.sleep(1.0)
+        logger.debug("Stop signal seen for %s — grace %ss", agent_id,
+                     _STOP_SIGNAL_GRACE_S)
+        await asyncio.sleep(_STOP_SIGNAL_GRACE_S)
+        # Still running (we weren't cancelled): hung process, dead turn.
+        logger.warning("Worker %s signalled Stop %.0fs ago but its stream "
+                       "is still open — reaping", agent_id, _STOP_SIGNAL_GRACE_S)
+        await worker.kill(agent_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — the watcher must never break a run
+        logger.debug("Stop-signal watcher error for %s: %s", agent_id, exc)
+
+
+async def _ingest_guard_log(agent: SpawnedAgent, session_id: str) -> None:
+    """F1.3: guard denials → GUARD_TRIPPED events (origin=agent — the agent
+    CHOSE the command; its own event class so META clusters it)."""
+    path = _guard_log_path(agent.agent_id)
+    if not path.exists():
+        return
+    import json as _json
+    try:
+        lines = path.read_text().splitlines()
+        path.unlink()   # consumed — a re-spawned agent starts a fresh log
+    except OSError as exc:
+        logger.warning("Guard log read failed for %s: %s", agent.agent_id, exc)
+        return
+    for line in lines:
+        try:
+            entry = _json.loads(line)
+        except ValueError:
+            continue
+        try:
+            await write_event(HiveEvent(
+                type=EventType.GUARD_TRIPPED, agent_id=agent.agent_id,
+                session_id=session_id, origin="agent",
+                raw_payload={"command": entry.get("command"),
+                             "reason": entry.get("reason")},
+            ))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Guard event write failed: %s", exc)
+        await _emit_to_ws(session_id, {
+            "type": "guard_tripped", "session_id": session_id,
+            "agent_id": agent.agent_id, "reason": entry.get("reason"),
+        })
+
+
 async def _reserve_local_vram(agent: SpawnedAgent) -> tuple[bool, str]:
     """Reserve resources for a local worker.
 
@@ -1260,6 +1372,18 @@ async def _execute_worker(
         except Exception as exc:
             logger.warning("claude session lookup failed for %s: %s", agent.agent_id, exc)
 
+    # F1/F2: per-worker hook settings — the guard tripwire + lifecycle stop
+    # signal. Worktree-scoped (.claude/settings.json in the worker's cwd),
+    # never the user's global settings. Verified live: a PreToolUse deny
+    # blocks even under --dangerously-skip-permissions.
+    signal_path: Path | None = None
+    if agent.model.startswith("claude:") and agent.worktree_path:
+        try:
+            signal_path = _write_worker_hooks(agent)
+        except Exception as exc:  # noqa: BLE001 — a hookless worker still
+            # has worktree isolation; don't fail the spawn.
+            logger.warning("Hook settings write failed for %s: %s", agent.agent_id, exc)
+
     # E2: a local worker must fit VRAM *now* — headroom may have vanished
     # since planning (user gaming/rendering, another local worker loaded).
     # Refusal swaps to the brief's declared Claude fallback tier, visibly.
@@ -1307,6 +1431,16 @@ async def _execute_worker(
         agent_id=agent.agent_id, status="completed", text_output="",
         input_tokens=0, output_tokens=0, cost_usd=0.0, error=None,
     )
+
+    # F2: push-side liveness — the worker's Stop hook appends to the signal
+    # file the instant its turn ends. If the stream is still open 15s after
+    # the signal, the process is hung with a dead turn: reap it. Pid-death
+    # (pull side) and this signal are two idempotent paths to the same end;
+    # a signal for an already-finished stream is a no-op (task cancelled).
+    watcher: asyncio.Task | None = None
+    if signal_path is not None:
+        watcher = asyncio.create_task(
+            _watch_stop_signal(signal_path, worker, agent.agent_id))
 
     try:
         async for event in worker.run(prompt, config):
@@ -1370,9 +1504,17 @@ async def _execute_worker(
         result["error"] = str(exc)
         result["failure_origin"] = "infrastructure"  # HIVE's own code raised
     finally:
+        if watcher is not None:
+            watcher.cancel()
         if vram_reservation_key is not None:
             from backend.resources import vram_manager
             vram_manager.release(vram_reservation_key)
+
+    # F1.3: any guard denials during the run become events.
+    try:
+        await _ingest_guard_log(agent, session_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Guard log ingestion failed for %s: %s", agent.agent_id, exc)
 
     result["text_output"] = final_text if final_text is not None else "".join(text_parts)
     await _auto_commit_worktree(agent.worktree_path, agent.agent_id)
