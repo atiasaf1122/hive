@@ -595,6 +595,104 @@ navigational gain. Don't.
 
 # Progress log (newest first)
 
+## 2026-07-06 — Phase D "META / self-improvement" COMPLETE
+
+The learning layer: HIVE now diagnoses its own failures from the event log,
+distills lessons only from objective evidence, gates its own plans, and can
+explain any session after the fact. 510 tests passing. Nine sections
+(D0–D8), one commit each (`d82e784`..`fc29718`), plus a post-e2e fix commit
+(`ed5c398`).
+
+- **D0 reliability floor**: worker stderr drained into a bounded 2KB tail —
+  the C5 "exited 1 (no stderr)" mode is now diagnosable from the event log
+  alone; failure origin ∈ {agent, infrastructure, unknown} on every
+  event/result, and trust only charges origin=agent (Phase C charged workers
+  for HIVE's own integration bugs); backend/mcp/doctor.py productizes the C5
+  stdio probe — spawn + initialize handshake before any agent pays for a
+  broken server (live: playwright/context7/filesystem OK, github correctly
+  reports the missing token); contaminated trust scores reset once.
+- **D1 lessons store**: grounded writes only (validation-failure followed by
+  a later clean run, llm_review resolutions, infra failures with concrete
+  causes) — never an agent's self-diagnosis; Haiku distiller behind an
+  interface (local-Ollama swap point later); 0–10 groundedness gate, <8
+  discarded and logged; conservative reads (0.55 similarity bar, zero
+  injections is the normal outcome, foreign-project lessons never inject,
+  max 3 per brief); hygiene counters + 3-strike archive + Settings → Lessons
+  tab. Deviation: staleness measured in days, not the spec's "sessions"
+  (not a monotonic clock).
+- **D2 plan gate**: one budgeted Haiku call scores each plan
+  (coverage/overlap/fit/size); <7 triggers ONE revision round; a
+  still-flagged plan forces the approval modal even in full-auto (amber
+  issues panel). Fails OPEN — a Haiku outage never blocks work.
+- **D3 compaction**: at ~20k history tokens or 12 turns, one Haiku call
+  rewrites older turns into a CURRENT STATE doc; pruned turns preserved
+  inside the compaction event; a failed doc build skips compaction rather
+  than losing context.
+- **D4 file-overlap resolution**: the deterministic sibling of the D2 gate —
+  normalized files_hint intersections at parse time; same-role overlap →
+  briefs merged; cross-role → later agent moves a wave with a
+  read-my-branch note; vague hints exempt.
+- **D5 golden suite**: 8 fixed specs through the REAL pipeline with
+  executable success criteria (file_exists/file_contains/command_succeeds),
+  timestamped reports + regression diff vs previous run; manual `hive
+  golden run` only, never CI.
+- **D6 estimates**: median/p90 cost + duration from similar past sessions
+  (agent count ±1) in the approval modal; <3 similar sessions → "no
+  estimate yet", never invented numbers; estimate-vs-actual event recorded
+  at review. Deviation: the optional semantic-similarity tiebreak skipped.
+- **D7 trajectory replay**: GET /api/sessions/{id}/trajectory rebuilds the
+  whole session story from persisted events + checkpoint turns (no new
+  backend state); desktop Chat ⇄ Replay toggle with typed timeline, agent
+  filter, jump-to-first-error.
+- **D8 META agent**: input assembly is pure code (lessons stats,
+  origin-split trust, failure clusters, cost by model/role, estimate drift,
+  golden trends); ONE Opus call — the one place the strong model earns it —
+  writes META_REPORT.md; nothing auto-executes, and [lesson] recommendations
+  go through the same D1 groundedness gate (422 on failure).
+
+**E2E proof (4 live sessions, 2026-07-05 21:33–21:45)**: a docs task on a
+`trunk`-default-branch repo (×2) and a forced-merge-conflict task (×2).
+What demonstrably worked live: the plan gate scored every plan and fired
+its one revision round on the conflict plans (two gate calls in cost_log);
+D6 estimates appeared with honest "based on N similar sessions" and
+estimate/actual events recorded on all four; the planner tiered all four
+trivial agents to Haiku (cost discipline held); mechanical merge hit a REAL
+conflict in e2e-conflict2 and Opus llm_review resolved it correctly (kept
+the upstream hotfix line atop the builder's rewrite, conflicts: 1, merge
+commit `e1fb346`); session close fired the lesson distiller on that
+llm_review evidence.
+
+**The learning loop did NOT visibly close.** The distiller ran ($0.0127)
+but stored nothing — no lesson row, no discard event. That's consistent
+with a legitimate 'NONE' verdict on thin evidence, but nothing was ever
+injected (lesson_applications is empty), so fail-once-learn-not-fail-again
+remains UNPROVEN end-to-end. First follow-up next session: one instrumented
+re-run of the conflict pair to observe the distiller's raw output (NONE vs
+silently dropped draft) and drive a real injection.
+
+**Two bugs found by the e2e (fixed + regression-tested, `ed5c398`)**:
+1. Spawner role-index collision — two same-role count=1 members (the normal
+   B1 plan shape) got identical agent_ids; the second worktree creation
+   failed and its entire subtask was SILENTLY dropped.
+2. Validation merge-base candidates were only {main_branch, master, main} —
+   any nonstandard default branch ('trunk', 'develop') false-negatived
+   every claim. Candidates now include all non-`hive/` local branches.
+
+**Measured costs**: plan gate $0.007–0.026/call (Haiku; ×2 when the
+revision round fires); lesson distillation $0.013; summarizer
+$0.017–0.029/agent; a whole trivial e2e session lands at ~$0.06–0.09.
+Opus llm_review cost is NOT captured in cost_log (only the reviewer notes
+event) — a gap worth closing. The golden suite and META agent were NOT run
+live (golden/reports/ is empty, no META cost logged) — their real costs
+are unmeasured until a `hive golden run` + `hive meta` baseline.
+
+**Flags carried forward**: (1) close the learning loop with an instrumented
+conflict re-run — decide whether the grounded triggers are too conservative
+or a draft is being dropped without its discard event; (2) log reviewer and
+META costs to cost_log; (3) first live golden baseline + META run; (4) once
+(1) is understood, make D5's lessons-injection golden spec actually observe
+an injection, not just a nonstandard branch.
+
 ## 2026-07-05 — Phase C "MCP execution" COMPLETE
 
 Eyes and hands via integration, not building: agents can now drive real
