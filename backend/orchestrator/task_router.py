@@ -220,7 +220,12 @@ async def answer_chat(message: str, history: list[dict], session_id: str) -> str
 
     config = WorkerConfig(
         agent_id=f"chat-{session_id}", session_id=session_id,
-        model=DEFAULT_MODEL, worktree_path="/tmp", max_turns=2,
+        # E0.5 finding: with the CLI's full default toolset the chat call
+        # kept reaching for tools and died on the 2-turn cap (every CHAT
+        # turn then fell back to the full planner — resilient but never
+        # thin). Restrict to Read and give a little headroom.
+        model=DEFAULT_MODEL, worktree_path="/tmp", max_turns=4,
+        allowed_tools=["Read"],
     )
     worker = ClaudeCLIWorker()
     chunks: list[str] = []
