@@ -595,6 +595,39 @@ navigational gain. Don't.
 
 # Progress log (newest first)
 
+## 2026-07-07 — One-click desktop launcher (Windows shortcuts)
+
+QoL for daily use: double-clickable **HIVE** / **Stop HIVE** shortcuts on the
+Windows desktop, backed by four committed scripts in `scripts/`.
+
+- `launch-hive.ps1` — TCP-probes 127.0.0.1:8765; if down, starts the backend
+  detached in WSL via `start-hive-backend.sh`, waits ≤30s for the port
+  (window stays open on failure with the backend log tail), then launches the
+  desktop app: prefers `src-tauri\target\release\hive.exe` if a release build
+  ever exists, else `npm run tauri:dev` in `C:\Users\The One\hive-desktop`
+  hidden (log: `%TEMP%\hive-tauri-dev.log`).
+- `start-hive-backend.sh` — setsid double-detach + 1s grace. Found the hard
+  way: `wsl.exe -- bash -lc "nohup … &"` silently does nothing — bash exits
+  instantly and WSL tears the session down before the backgrounded subshell
+  runs; inline commands through wsl.exe also get inner quotes mangled. Fix:
+  keep logic in a WSL-side script, detach with setsid, keep wsl.exe alive 1s.
+- `stop-hive.ps1` + `stop-hive-wsl.sh` — kills hive.exe + tauri dev tooling
+  (matched by `hive-desktop|hive-tauri-dev` in command lines), the uvicorn
+  backend, and orphaned workers (narrow pattern: `--output-format
+  stream-json.*--dangerously-skip-permissions` — interactive claude sessions
+  never match). Reports everything killed; offers `wsl --shutdown` (y/N) only
+  when no user processes remain (systemd --user infra excluded).
+- Tested live end-to-end: cold launch → backend up ~1s, app up ~40s (dev
+  mode) → CHAT session answered "ready" with zero spawns → stop killed
+  app + 4 dev processes + backend, spared the interactive claude session.
+- **Release build deliberately skipped**: `tauri:build` uses
+  tauri.conf.prod.json which needs the `binaries/hive-backend` sidecar
+  (packaging is PARKED); a default-config build would bake the frontend and
+  go stale on every UI change. Launcher auto-prefers a release exe if one
+  appears later — zero changes needed then.
+- Noticed: `/health` reports version **0.9.0** while pyproject says 1.0.0 —
+  the venv's installed metadata is stale; `uv pip install -e .` refreshes it.
+
 ## 2026-07-06 — Phase G COMPLETE — HIVE graduates to v1.0.0
 
 The final close-out: every item on F's "honest next" list cleared, the
