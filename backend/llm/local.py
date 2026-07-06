@@ -68,7 +68,8 @@ class LocalCaller:
 
         try:
             from backend.persistence.events import write_cost
-            await write_cost(self.session_id, agent_id, tokens_in, tokens_out, 0.0)
+            await write_cost(self.session_id, agent_id, tokens_in, tokens_out, 0.0,
+                             local=True)
         except Exception as exc:  # noqa: BLE001 — cost logging is best-effort
             logger.debug("Local cost write failed: %s", exc)
 

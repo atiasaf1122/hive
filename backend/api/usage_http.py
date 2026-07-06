@@ -44,6 +44,11 @@ class ClaudeUsage(BaseModel):
 class OllamaUsage(BaseModel):
     total_runs_week: int
     by_model: list[dict]
+    # E5: what the local tokens WOULD have cost at the fallback tier
+    # (Haiku: $1/MTok in, $5/MTok out) — the "saved via local" line.
+    local_input_tokens_week: int = 0
+    local_output_tokens_week: int = 0
+    saved_usd_week: float = 0.0
 
 
 class UsageResponse(BaseModel):
@@ -93,7 +98,23 @@ async def _ollama_usage_week(db_path: Path) -> OllamaUsage:
         rows = await cur.fetchall()
     by_model = [{"model": r["model"], "runs": int(r["runs"])} for r in rows]
     total = sum(r["runs"] for r in by_model)
-    return OllamaUsage(total_runs_week=total, by_model=by_model)
+
+    # Savings: tokens from local=1 cost rows priced at the Haiku fallback
+    # tier ($1/$5 per MTok as of 2026-07) — what those runs would have cost.
+    async with get_conn(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT COALESCE(SUM(input_tokens),0) AS itok, "
+            "       COALESCE(SUM(output_tokens),0) AS otok "
+            "FROM cost_log WHERE local=1 AND ts >= datetime('now', '-7 days')",
+        )
+        row = await cur.fetchone()
+    itok, otok = int(row["itok"] or 0), int(row["otok"] or 0)
+    saved = itok * 1.0 / 1_000_000 + otok * 5.0 / 1_000_000
+    return OllamaUsage(
+        total_runs_week=total, by_model=by_model,
+        local_input_tokens_week=itok, local_output_tokens_week=otok,
+        saved_usd_week=round(saved, 4),
+    )
 
 
 @router.get("/summary", response_model=UsageResponse)

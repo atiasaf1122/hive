@@ -1306,7 +1306,8 @@ async def _execute_worker(
                 result["cost_usd"] = event.cost_usd or 0.0
                 try:
                     await write_cost(session_id, agent.agent_id,
-                                     result["input_tokens"], result["output_tokens"], result["cost_usd"])
+                                     result["input_tokens"], result["output_tokens"], result["cost_usd"],
+                                     local=not agent.model.startswith("claude:"))
                 except Exception as exc:
                     logger.warning("Cost write failed for %s: %s", agent.agent_id, exc)
             elif event.type == EventType.AGENT_ERROR:

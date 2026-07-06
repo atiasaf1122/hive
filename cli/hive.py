@@ -80,6 +80,7 @@ def golden_run(
     """Execute golden specs through the real pipeline and diff vs last report."""
 
     async def _run() -> int:
+        from backend.detection import detect_backends
         from backend.golden.runner import (
             diff_reports,
             load_specs,
@@ -87,6 +88,13 @@ def golden_run(
             run_spec,
             write_report,
         )
+
+        # E5: resolve the Ollama endpoint (WSL host-IP fallback) so hybrid
+        # routing sees the local pool — without this, discovery probes
+        # localhost, finds nothing, and every run silently goes Claude-only.
+        status = await detect_backends()
+        if status.ollama:
+            typer.echo(f"Local pool: {', '.join(status.ollama_models) or '(none)'}")
 
         specs = load_specs(only=only)
         if not specs:

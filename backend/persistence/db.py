@@ -61,7 +61,8 @@ CREATE TABLE IF NOT EXISTS cost_log (
     agent_id    TEXT NOT NULL,
     input_tokens  INTEGER NOT NULL DEFAULT 0,
     output_tokens INTEGER NOT NULL DEFAULT 0,
-    cost_usd    REAL NOT NULL DEFAULT 0.0
+    cost_usd    REAL NOT NULL DEFAULT 0.0,
+    local       INTEGER NOT NULL DEFAULT 0   -- E5: ran on the user's own GPUs ($0)
 );
 
 CREATE TABLE IF NOT EXISTS skills (
@@ -195,6 +196,7 @@ def ensure_hive_dir() -> Path:
 # here is ALTERed in; "duplicate column" errors mean it's already applied.
 _COLUMN_MIGRATIONS = [
     "ALTER TABLE agents ADD COLUMN claude_session_id TEXT",
+    "ALTER TABLE cost_log ADD COLUMN local INTEGER NOT NULL DEFAULT 0",
 ]
 
 

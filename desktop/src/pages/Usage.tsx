@@ -48,6 +48,9 @@ interface UsageSummary {
   ollama: {
     total_runs_week: number
     by_model: { model: string; runs: number }[]
+    local_input_tokens_week?: number
+    local_output_tokens_week?: number
+    saved_usd_week?: number
   }
   notes: string[]
 }
@@ -316,6 +319,12 @@ function OllamaSection({ u }: { u: UsageSummary }) {
         <div className="text-[11px] text-ink-faint">
           local runs this week · saving you {total} cloud requests
         </div>
+        {(u.ollama.saved_usd_week ?? 0) > 0 && (
+          <div className="text-[11px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-500">
+            🏠 saved ~${(u.ollama.saved_usd_week ?? 0).toFixed(2)} vs haiku ·{' '}
+            {(((u.ollama.local_input_tokens_week ?? 0) + (u.ollama.local_output_tokens_week ?? 0)) / 1000).toFixed(1)}k tokens at $0
+          </div>
+        )}
       </div>
       {u.ollama.by_model.length > 0 && (
         <div className="grid grid-cols-3 gap-2 mt-3">

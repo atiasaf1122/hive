@@ -152,11 +152,15 @@ async def write_cost(
     output_tokens: int,
     cost_usd: float,
     db_path: Path = DB_PATH,
+    local: bool = False,
 ) -> None:
+    # E5: local=True marks a run on the user's own GPUs — cost 0 but token
+    # counts kept (still context data, and they price the "saved vs haiku"
+    # line in the usage UI).
     async with get_conn(db_path) as conn:
         await conn.execute(
-            "INSERT INTO cost_log (session_id, agent_id, input_tokens, output_tokens, cost_usd) VALUES (?,?,?,?,?)",
-            (session_id, agent_id, input_tokens, output_tokens, cost_usd),
+            "INSERT INTO cost_log (session_id, agent_id, input_tokens, output_tokens, cost_usd, local) VALUES (?,?,?,?,?,?)",
+            (session_id, agent_id, input_tokens, output_tokens, cost_usd, int(local)),
         )
         await conn.commit()
 
