@@ -32,8 +32,21 @@ import pytest  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-def _no_real_model_calls():
+def _no_real_model_calls(request):
     from unittest.mock import AsyncMock, patch
+
+    # Tests that exercise the detection functions themselves opt out of
+    # the path patches (but never out of the model-call blocks).
+    if "real_detection" in request.keywords:
+        with patch(
+            "backend.orchestrator.task_router._haiku",
+            new=AsyncMock(side_effect=RuntimeError("hermetic tests: no real model calls")),
+        ), patch(
+            "backend.orchestrator.task_router._ollama_generate",
+            new=AsyncMock(side_effect=RuntimeError("hermetic tests: no real model calls")),
+        ):
+            yield
+        return
 
     with patch(
         "backend.orchestrator.task_router._haiku",
@@ -41,5 +54,20 @@ def _no_real_model_calls():
     ), patch(
         "backend.orchestrator.task_router._ollama_generate",
         new=AsyncMock(side_effect=RuntimeError("hermetic tests: no real model calls")),
+    ), patch(
+        # Point Ollama discovery at an instantly-refused port. On WSL a
+        # connect to an unbound localhost:11434 can HANG to the 4s
+        # timeout, which added ~8s to every _execute_worker test once
+        # the E4 summarizer started consulting the local pool. Tests
+        # that exercise discovery pass base_url= or mock httpx anyway.
+        "backend.detection.resolved_ollama_base",
+        new=lambda: "http://127.0.0.1:9",
+    ), patch(
+        # Any un-mocked ClaudeCLIWorker spawn dies instantly instead of
+        # running the REAL claude CLI (observed: the E4 summarizer path
+        # silently spent ~7s + real API money per graph test). Worker
+        # unit tests mock create_subprocess_exec and are unaffected.
+        "backend.detection.resolved_claude_path",
+        new=lambda: "/nonexistent/claude-blocked-by-hermetic-tests",
     ):
         yield

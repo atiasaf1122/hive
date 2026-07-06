@@ -104,7 +104,26 @@ class VRAMManager:
         self._reservations.pop(key, None)
 
 
+# Snapshot cache: discovery runs on every plan turn, spawn, and
+# summarizer selection — an nvidia-smi subprocess each time is pure
+# waste (and doubled the unit-test suite's runtime). 2s of staleness is
+# irrelevant next to model-load times.
+_SMI_CACHE_TTL_S = 2.0
+_smi_cache: tuple[float, list[GPUInfo] | None] | None = None
+
+
 async def _query_nvidia_smi() -> list[GPUInfo] | None:
+    global _smi_cache
+    import time as _time
+
+    if _smi_cache is not None and _time.monotonic() - _smi_cache[0] < _SMI_CACHE_TTL_S:
+        return _smi_cache[1]
+    result = await _query_nvidia_smi_uncached()
+    _smi_cache = (_time.monotonic(), result)
+    return result
+
+
+async def _query_nvidia_smi_uncached() -> list[GPUInfo] | None:
     try:
         proc = await asyncio.create_subprocess_exec(
             "nvidia-smi",

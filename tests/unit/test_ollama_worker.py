@@ -35,7 +35,7 @@ async def test_successful_generation():
         return_value=httpx.Response(200, content=_ndjson_response(*chunks))
     )
 
-    worker = OllamaWorker()
+    worker = OllamaWorker(base_url="http://localhost:11434")
     events = [e async for e in worker.run("say hello", _make_config())]
 
     types = [e.type for e in events]
@@ -60,7 +60,7 @@ async def test_cost_event_has_zero_usd():
         return_value=httpx.Response(200, content=_ndjson_response(*chunks))
     )
 
-    worker = OllamaWorker()
+    worker = OllamaWorker(base_url="http://localhost:11434")
     events = [e async for e in worker.run("hi", _make_config())]
     cost_events = [e for e in events if e.type == EventType.COST]
 
@@ -88,7 +88,7 @@ async def test_http_error_response_yields_agent_error():
         return_value=httpx.Response(404, content=b'{"error":"model not found"}')
     )
 
-    worker = OllamaWorker()
+    worker = OllamaWorker(base_url="http://localhost:11434")
     events = [e async for e in worker.run("hi", _make_config())]
 
     error_events = [e for e in events if e.type == EventType.AGENT_ERROR]
@@ -109,7 +109,7 @@ async def test_model_name_extracted_from_spec():
 
     respx.post("http://localhost:11434/api/generate").mock(side_effect=capture)
 
-    worker = OllamaWorker()
+    worker = OllamaWorker(base_url="http://localhost:11434")
     async for _ in worker.run("hi", _make_config("ollama:qwen2.5")):
         pass
 

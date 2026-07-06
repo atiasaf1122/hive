@@ -120,6 +120,7 @@ def test_locate_claude_binary_returns_none_when_truly_absent(monkeypatch, tmp_pa
     assert detection._locate_claude_binary() is None
 
 
+@pytest.mark.real_detection
 def test_resolved_claude_path_defaults_to_bare_claude():
     """Until detection has cached a path, callers get the legacy 'claude'
     string so a PATH-based setup keeps working without any new wiring."""
@@ -129,6 +130,7 @@ def test_resolved_claude_path_defaults_to_bare_claude():
     assert detection.resolved_claude_path() == "claude"
 
 
+@pytest.mark.real_detection
 def test_resolved_claude_path_returns_cached_value():
     from backend import detection
 

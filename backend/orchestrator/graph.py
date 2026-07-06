@@ -1031,19 +1031,20 @@ async def _ensure_worktree_identity(worktree_path: str) -> None:
 async def _summarize_worker_run(
     events: list, session_id: str, agent: SpawnedAgent, prompt: str
 ):
-    """One Haiku call collapsing a worker's event stream (B3).
+    """One cheap-model call collapsing a worker's event stream (B3).
 
-    Isolated so tests can patch it; production path builds a session-scoped
-    HaikuCaller (budgeted, cost-logged) over the summarizer runner.
+    Isolated so tests can patch it. E4: the engine is local-first when a
+    summarization-capable model is available (Haiku fallback baked into
+    the caller); HIVE_LOCAL_INTERNAL=off restores pure Haiku.
     """
-    from backend.llm.haiku import HaikuCaller
+    from backend.llm.local import internal_task_caller
     from backend.summarizer.runner import summarize_events
 
-    caller = HaikuCaller(
-        worker=ClaudeCLIWorker(),
-        session_id=session_id,
+    caller, label = await internal_task_caller(
+        "summarization", session_id,
         agent_id_prefix=f"summarizer-{agent.agent_id}",
     )
+    logger.debug("Summarizer engine for %s: %s", agent.agent_id, label)
     return await summarize_events(
         events,
         haiku_caller=caller,

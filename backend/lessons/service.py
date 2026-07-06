@@ -99,15 +99,16 @@ def _collect_triggers(events: list[dict]) -> list[Trigger]:
     return triggers[:MAX_TRIGGERS_PER_SESSION]
 
 
-def _default_distiller(session_id: str):
+async def _default_distiller(session_id: str):
+    # E4: distillation runs on a local model when one is available (free
+    # on the user's GPUs), Haiku otherwise — selection + fallback live in
+    # internal_task_caller. The distiller class is caller-agnostic.
     from backend.lessons.distiller import HaikuLessonDistiller
-    from backend.llm.haiku import HaikuCaller
-    from backend.workers.claude_cli import ClaudeCLIWorker
+    from backend.llm.local import internal_task_caller
 
-    caller = HaikuCaller(
-        worker=ClaudeCLIWorker(), session_id=session_id,
-        agent_id_prefix="lesson-distiller",
-    )
+    caller, label = await internal_task_caller(
+        "distillation", session_id, agent_id_prefix="lesson-distiller")
+    logger.info("Distiller engine for %s: %s", session_id, label)
     return HaikuLessonDistiller(caller)
 
 
@@ -139,7 +140,7 @@ async def distill_session_lessons(
         triggers = _collect_triggers(events)
         if not triggers:
             return []
-        distiller = distiller or _default_distiller(session_id)
+        distiller = distiller or await _default_distiller(session_id)
 
         # E0.1 audit-trail invariant: each trigger emits EXACTLY ONE of
         # LESSON_STORED / LESSON_DISCARDED / LESSON_NONE. The Phase D e2e
