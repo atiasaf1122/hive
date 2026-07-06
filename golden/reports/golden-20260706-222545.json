@@ -1,0 +1,19 @@
+{
+  "timestamp": "20260706-222545",
+  "results": [
+    {
+      "name": "flask-todo-api",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 178.1,
+      "cost_usd": 0.3836,
+      "input_tokens": 2176,
+      "output_tokens": 8046,
+      "agents_spawned": 2,
+      "session_id": "g0498dca"
+    }
+  ],
+  "total_cost_usd": 0.3836,
+  "passed": 1,
+  "total": 1
+}

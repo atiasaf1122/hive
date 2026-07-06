@@ -1,0 +1,21 @@
+{
+  "timestamp": "20260706-222203",
+  "results": [
+    {
+      "name": "flask-todo-api",
+      "success": false,
+      "failures": [
+        "command_succeeds: `python3 -m pytest -q` exited 1: [1m\u001b[31mtest_app.py\u001b[0m:53: AssertionError\n\u001b[36m\u001b[1m=========================== short test summary info ============================\u001b[0m\n\u001b[31mFAILED\u001b[0m test_app.py::\u001b[1mtest_get_todos_with_items\u001b[0m - AssertionError: assert 2 == 1\n\u001b[31m\u001b[31m\u001b[1m1 failed\u001b[0m, \u001b[32m6 passed\u001b[0m\u001b[31m in 0.10s\u001b[0m\u001b[0m\n"
+      ],
+      "wall_seconds": 64.6,
+      "cost_usd": 0.0,
+      "input_tokens": 637,
+      "output_tokens": 1381,
+      "agents_spawned": 1,
+      "session_id": "g3134507"
+    }
+  ],
+  "total_cost_usd": 0.0,
+  "passed": 0,
+  "total": 1
+}

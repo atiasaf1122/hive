@@ -40,7 +40,10 @@ _RUBRIC = """Classify a user request for an AI coding-agent system. Reply with O
 - "solo": ONE focused change with clear scope (one file/concern): fix a typo, rename X,
   add a null check, tweak a config, write one small file/doc.
 - "swarm": multi-part or multi-file work, anything needing decomposition, design, or
-  exploration.
+  exploration. IN PARTICULAR: any task naming two deliverables that must AGREE with each
+  other — an API AND a test suite for it, a module AND the code that consumes it, an
+  implementation AND its documentation of the interface — is SWARM, never solo. One worker
+  guessing both halves of a contract is exactly how they end up mismatched.
 - "role": for solo only — who should do it (code → Builder, prose/docs → Writer,
   small text edits → Editor, look-something-up → Researcher).
 - "mechanical": for solo only — true when the change is fully specified by the request
