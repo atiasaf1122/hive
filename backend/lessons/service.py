@@ -133,9 +133,6 @@ async def distill_session_lessons(
     db_path: Path = DB_PATH,
 ) -> list[int]:
     """Run at session close. Returns ids of lessons saved. Never raises."""
-    from backend.lessons.distiller import GATE_THRESHOLD
-    from backend.lessons.store import save_lesson
-
     saved: list[int] = []
     try:
         events = await get_session_events(session_id, path=db_path)
@@ -144,39 +141,84 @@ async def distill_session_lessons(
             return []
         distiller = distiller or _default_distiller(session_id)
 
+        # E0.1 audit-trail invariant: each trigger emits EXACTLY ONE of
+        # LESSON_STORED / LESSON_DISCARDED / LESSON_NONE. The Phase D e2e
+        # stored nothing AND logged nothing, and "legitimately NONE" vs
+        # "silently dropped" could not be distinguished after the fact.
         for trigger in triggers:
-            draft = await distiller.distill(trigger.evidence, origin=trigger.origin)
-            if draft is None:
-                continue
-            score = await distiller.gate(draft, trigger.evidence)
-            if score < GATE_THRESHOLD:
-                # Log the discard as an event for later inspection (D1.3).
+            try:
+                await _distill_one(
+                    trigger, distiller, session_id, project_path, db_path, saved)
+            except Exception as exc:  # noqa: BLE001 — one bad trigger must not
+                # silence the others, and even the error leaves a trail.
+                logger.warning("Distillation attempt failed for %s: %s", session_id, exc)
                 await write_event(HiveEvent(
-                    type=EventType.LESSON_DISCARDED,
+                    type=EventType.LESSON_NONE,
                     agent_id="lesson-distiller", session_id=session_id,
-                    raw_payload={"score": score, "title": draft.title,
-                                 "content": draft.content,
-                                 "evidence": trigger.evidence[:1000]},
+                    raw_payload={"reason": f"distiller error: {exc}",
+                                 "trigger_kind": trigger.kind},
                 ), path=db_path)
-                logger.info("Lesson discarded by gate (score %d): %s", score, draft.title)
-                continue
-            if await _is_duplicate(draft, db_path):
-                logger.info("Lesson skipped as duplicate: %s", draft.title)
-                continue
-            lesson_id = await save_lesson(
-                scope="project" if project_path else "global",
-                project_path=project_path,
-                title=draft.title, description=draft.description,
-                content=draft.content, trigger_context=draft.trigger_context,
-                origin=draft.origin, source_session=session_id,
-                source_evidence=trigger.evidence[:2000],
-                db_path=db_path,
-            )
-            saved.append(lesson_id)
-            logger.info("Lesson %d saved (gate %d): %s", lesson_id, score, draft.title)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Lesson distillation failed for %s: %s", session_id, exc)
     return saved
+
+
+async def _distill_one(
+    trigger: Trigger, distiller, session_id: str,
+    project_path: str | None, db_path: Path, saved: list[int],
+) -> None:
+    from backend.lessons.distiller import GATE_THRESHOLD
+    from backend.lessons.store import save_lesson
+
+    result = await distiller.distill(trigger.evidence, origin=trigger.origin)
+    if result.draft is None:
+        await write_event(HiveEvent(
+            type=EventType.LESSON_NONE,
+            agent_id="lesson-distiller", session_id=session_id,
+            raw_payload={"reason": result.reason, "trigger_kind": trigger.kind,
+                         "evidence": trigger.evidence[:1000]},
+        ), path=db_path)
+        logger.info("Lesson NONE (%s): %s", trigger.kind, result.reason)
+        return
+    draft = result.draft
+    gate = await distiller.gate(draft, trigger.evidence)
+    if gate.score < GATE_THRESHOLD:
+        await write_event(HiveEvent(
+            type=EventType.LESSON_DISCARDED,
+            agent_id="lesson-distiller", session_id=session_id,
+            raw_payload={"gate_score": gate.score, "draft_title": draft.title,
+                         "reason": gate.reason or "below groundedness gate",
+                         "content": draft.content,
+                         "evidence": trigger.evidence[:1000]},
+        ), path=db_path)
+        logger.info("Lesson discarded by gate (score %d): %s", gate.score, draft.title)
+        return
+    if await _is_duplicate(draft, db_path):
+        await write_event(HiveEvent(
+            type=EventType.LESSON_DISCARDED,
+            agent_id="lesson-distiller", session_id=session_id,
+            raw_payload={"gate_score": gate.score, "draft_title": draft.title,
+                         "reason": "near-duplicate of an existing active lesson"},
+        ), path=db_path)
+        logger.info("Lesson skipped as duplicate: %s", draft.title)
+        return
+    lesson_id = await save_lesson(
+        scope="project" if project_path else "global",
+        project_path=project_path,
+        title=draft.title, description=draft.description,
+        content=draft.content, trigger_context=draft.trigger_context,
+        origin=draft.origin, source_session=session_id,
+        source_evidence=trigger.evidence[:2000],
+        db_path=db_path,
+    )
+    saved.append(lesson_id)
+    await write_event(HiveEvent(
+        type=EventType.LESSON_STORED,
+        agent_id="lesson-distiller", session_id=session_id,
+        raw_payload={"lesson_id": lesson_id, "gate_score": gate.score,
+                     "title": draft.title},
+    ), path=db_path)
+    logger.info("Lesson %d saved (gate %d): %s", lesson_id, gate.score, draft.title)
 
 
 async def run_session_hygiene(session_id: str, db_path: Path = DB_PATH) -> dict[int, bool]:

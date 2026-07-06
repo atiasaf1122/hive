@@ -50,7 +50,7 @@ async def accept_lesson(req: AcceptLessonRequest) -> dict:
         trigger_context=req.trigger_context, origin="agent",
     )
     distiller = _default_distiller("meta-accept")
-    score = await distiller.gate(draft, req.evidence)
+    score = (await distiller.gate(draft, req.evidence)).score
     if score < GATE_THRESHOLD:
         raise HTTPException(
             status_code=422,

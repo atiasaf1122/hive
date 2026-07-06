@@ -33,12 +33,28 @@ class LessonDraft:
     origin: str  # 'agent' | 'infrastructure'
 
 
+@dataclass
+class DistillResult:
+    """E0.1 audit trail: when no draft is produced, `reason` says why —
+    the model's own NONE explanation, or a parse-failure description.
+    The write path persists it in the LESSON_NONE event so a stored-nothing
+    outcome is never ambiguous again."""
+    draft: LessonDraft | None
+    reason: str = ""
+
+
+@dataclass
+class GateResult:
+    score: int
+    reason: str = ""
+
+
 class LessonDistiller(Protocol):
-    """Swap point: Haiku now, local Ollama later."""
+    """Swap point: Haiku now, local Ollama later (E4)."""
 
-    async def distill(self, evidence: str, *, origin: str) -> LessonDraft | None: ...
+    async def distill(self, evidence: str, *, origin: str) -> DistillResult: ...
 
-    async def gate(self, draft: LessonDraft, evidence: str) -> int: ...
+    async def gate(self, draft: LessonDraft, evidence: str) -> GateResult: ...
 
 
 _DISTILL_PROMPT = """You distill durable lessons for an AI coding swarm from OBJECTIVE EVIDENCE of a failure and (when present) its resolution.
@@ -49,7 +65,8 @@ Evidence (validator diagnoses, error payloads, review reasoning — nothing else
 ---
 
 Write a lesson ONLY if the evidence DIRECTLY supports it. If the root cause is
-not determinable from the evidence alone, output exactly: NONE
+not determinable from the evidence alone, output: NONE: <one short line saying
+what is missing from the evidence>
 (NONE is a common, correct answer — never guess.)
 
 If (and only if) the evidence supports a lesson, return ONE JSON object:
@@ -85,39 +102,43 @@ class HaikuLessonDistiller:
     def __init__(self, haiku_caller) -> None:
         self._call = haiku_caller
 
-    async def distill(self, evidence: str, *, origin: str) -> LessonDraft | None:
+    async def distill(self, evidence: str, *, origin: str) -> DistillResult:
         raw = await self._call(_DISTILL_PROMPT.format(evidence=evidence[:6000]))
         text = (raw or "").strip()
-        if not text or text.upper().startswith("NONE"):
-            return None
+        if not text:
+            return DistillResult(None, reason="empty distiller response")
+        if text.upper().startswith("NONE"):
+            reason = text[4:].strip().lstrip(":—- ").strip() or "model returned NONE without elaboration"
+            return DistillResult(None, reason=reason)
         data = _first_json(text)
         if not data:
             logger.warning("Distiller returned neither NONE nor JSON: %r", text[:120])
-            return None
+            return DistillResult(None, reason=f"unparseable distiller output: {text[:200]}")
         title = str(data.get("title") or "").strip()
         content = str(data.get("content") or "").strip()
         trigger = str(data.get("trigger_context") or "").strip()
         if not (title and content and trigger):
-            return None
-        return LessonDraft(
+            return DistillResult(None, reason="draft missing required fields (title/content/trigger_context)")
+        return DistillResult(LessonDraft(
             title=title[:120],
             description=str(data.get("description") or title).strip()[:300],
             content=content[:600],
             trigger_context=trigger[:400],
             origin=origin,
-        )
+        ))
 
-    async def gate(self, draft: LessonDraft, evidence: str) -> int:
+    async def gate(self, draft: LessonDraft, evidence: str) -> GateResult:
         raw = await self._call(_GATE_PROMPT.format(
             evidence=evidence[:6000], title=draft.title,
             description=draft.description, content=draft.content,
             trigger_context=draft.trigger_context,
         ))
         data = _first_json((raw or "").strip()) or {}
+        reason = str(data.get("reason") or "").strip()[:300]
         try:
-            return max(0, min(10, int(data.get("score", 0))))
+            return GateResult(max(0, min(10, int(data.get("score", 0)))), reason)
         except (TypeError, ValueError):
-            return 0
+            return GateResult(0, reason or "gate returned no numeric score")
 
 
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)

@@ -100,7 +100,8 @@ def test_accept_lesson_goes_through_gate() -> None:
             self.score = score
 
         async def gate(self, draft, evidence):
-            return self.score
+            from backend.lessons.distiller import GateResult
+            return GateResult(self.score, "test")
 
     # Low gate score → rejected, nothing saved.
     with TestClient(app) as client, \

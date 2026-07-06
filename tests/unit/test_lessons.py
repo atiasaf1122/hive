@@ -7,7 +7,12 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from backend.lessons.distiller import GATE_THRESHOLD, LessonDraft
+from backend.lessons.distiller import (
+    GATE_THRESHOLD,
+    DistillResult,
+    GateResult,
+    LessonDraft,
+)
 from backend.lessons.service import (
     _collect_triggers,
     distill_session_lessons,
@@ -60,17 +65,21 @@ async def db(tmp_path):
 class FakeDistiller:
     """Deterministic distiller: returns a fixed draft; gate score settable."""
 
-    def __init__(self, draft: LessonDraft | None, score: int = 10) -> None:
+    def __init__(self, draft: LessonDraft | None, score: int = 10,
+                 none_reason: str = "no lesson supported") -> None:
         self.draft = draft
         self.score = score
+        self.none_reason = none_reason
         self.distill_calls: list[str] = []
 
     async def distill(self, evidence, *, origin):
         self.distill_calls.append(evidence)
-        return self.draft
+        if self.draft is None:
+            return DistillResult(None, reason=self.none_reason)
+        return DistillResult(self.draft)
 
     async def gate(self, draft, evidence):
-        return self.score
+        return GateResult(self.score, reason=f"scored {self.score}")
 
 
 _DRAFT = LessonDraft(
@@ -164,6 +173,95 @@ async def test_gate_discards_unsupported_lesson(db) -> None:
     from backend.persistence.events import get_session_events
     events = await get_session_events("sess-l", path=db)
     assert any(e["type"] == str(EventType.LESSON_DISCARDED) for e in events)
+
+
+# ── E0.1 audit trail: every attempt emits exactly one lesson/* event ────────
+
+
+async def _lesson_events(db):
+    from backend.persistence.events import get_session_events
+    events = await get_session_events("sess-l", path=db)
+    return [e for e in events if e["type"].startswith("lesson/")]
+
+
+@pytest.mark.asyncio
+async def test_stored_outcome_emits_lesson_stored_event(db) -> None:
+    await write_event(HiveEvent(
+        type=EventType.REVIEW_LLM, agent_id="reviewer", session_id="sess-l",
+        raw_payload={"notes": ["resolved the conflict, root cause X"]}), path=db)
+    saved = await distill_session_lessons(
+        "sess-l", "/proj", distiller=FakeDistiller(_DRAFT, 9), db_path=db)
+    evs = await _lesson_events(db)
+    assert len(evs) == 1 and evs[0]["type"] == str(EventType.LESSON_STORED)
+    payload = evs[0]["payload"]["raw_payload"]
+    assert payload["lesson_id"] == saved[0] and payload["gate_score"] == 9
+
+
+@pytest.mark.asyncio
+async def test_none_outcome_emits_lesson_none_with_reason(db) -> None:
+    await write_event(HiveEvent(
+        type=EventType.REVIEW_LLM, agent_id="reviewer", session_id="sess-l",
+        raw_payload={"notes": ["inconclusive"]}), path=db)
+    await distill_session_lessons(
+        "sess-l", "/proj",
+        distiller=FakeDistiller(None, none_reason="evidence names no root cause"),
+        db_path=db)
+    evs = await _lesson_events(db)
+    assert len(evs) == 1 and evs[0]["type"] == str(EventType.LESSON_NONE)
+    assert evs[0]["payload"]["raw_payload"]["reason"] == "evidence names no root cause"
+
+
+@pytest.mark.asyncio
+async def test_discard_outcome_emits_event_with_score_and_reason(db) -> None:
+    await write_event(HiveEvent(
+        type=EventType.REVIEW_LLM, agent_id="reviewer", session_id="sess-l",
+        raw_payload={"notes": ["resolved something"]}), path=db)
+    await distill_session_lessons(
+        "sess-l", "/proj",
+        distiller=FakeDistiller(_DRAFT, GATE_THRESHOLD - 2), db_path=db)
+    evs = await _lesson_events(db)
+    assert len(evs) == 1 and evs[0]["type"] == str(EventType.LESSON_DISCARDED)
+    payload = evs[0]["payload"]["raw_payload"]
+    assert payload["gate_score"] == GATE_THRESHOLD - 2
+    assert payload["draft_title"] == _DRAFT.title and payload["reason"]
+
+
+@pytest.mark.asyncio
+async def test_duplicate_outcome_emits_discard_event(db) -> None:
+    await save_lesson(scope="project", project_path="/proj", title=_DRAFT.title,
+                      description=_DRAFT.description, content=_DRAFT.content,
+                      trigger_context=_DRAFT.trigger_context, origin="agent",
+                      source_session="old", source_evidence="e", db_path=db)
+    await write_event(HiveEvent(
+        type=EventType.REVIEW_LLM, agent_id="reviewer", session_id="sess-l",
+        raw_payload={"notes": ["same again"]}), path=db)
+    await distill_session_lessons(
+        "sess-l", "/proj", distiller=FakeDistiller(_DRAFT, 10), db_path=db)
+    evs = await _lesson_events(db)
+    assert len(evs) == 1 and evs[0]["type"] == str(EventType.LESSON_DISCARDED)
+    assert "duplicate" in evs[0]["payload"]["raw_payload"]["reason"]
+
+
+@pytest.mark.asyncio
+async def test_distiller_exception_still_leaves_a_trail(db) -> None:
+    """No silent path: even a crashing distiller emits LESSON_NONE."""
+
+    class ExplodingDistiller:
+        async def distill(self, evidence, *, origin):
+            raise RuntimeError("model unreachable")
+
+        async def gate(self, draft, evidence):
+            raise AssertionError("unreached")
+
+    await write_event(HiveEvent(
+        type=EventType.REVIEW_LLM, agent_id="reviewer", session_id="sess-l",
+        raw_payload={"notes": ["resolved"]}), path=db)
+    saved = await distill_session_lessons(
+        "sess-l", "/proj", distiller=ExplodingDistiller(), db_path=db)
+    assert saved == []
+    evs = await _lesson_events(db)
+    assert len(evs) == 1 and evs[0]["type"] == str(EventType.LESSON_NONE)
+    assert "model unreachable" in evs[0]["payload"]["raw_payload"]["reason"]
 
 
 @pytest.mark.asyncio

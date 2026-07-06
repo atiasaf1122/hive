@@ -18,7 +18,11 @@ class EventType(StrEnum):
     # Phase D — persisted orchestrator events (learning-loop evidence)
     VALIDATION_FAILED = "validation/failed"
     REVIEW_LLM = "review/llm"
+    # E0.1 — every distillation attempt emits EXACTLY ONE of these three;
+    # no silent path may exist (the D e2e ambiguity was unacceptable).
+    LESSON_STORED = "lesson/stored"
     LESSON_DISCARDED = "lesson/discarded"
+    LESSON_NONE = "lesson/none"
     COMPACTION = "compaction/state"
     ESTIMATE_ACTUAL = "estimate/actual"
 
