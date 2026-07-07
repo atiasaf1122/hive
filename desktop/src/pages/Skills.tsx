@@ -1,128 +1,97 @@
 /**
- * Skills tab — unified search across ClawHub + Cookbook + Community + Installed.
+ * Skills — a browser over the LOCAL skills library (post-1.0 Part 4).
  *
- *   Hero with flow strip (task → match → top-3 → agent)
- *   Search bar + source filter pills
- *   Discover grid (results)
- *   Installed grid (local registry — via existing /api/sessions side-channel
- *                   is overkill; we just hit a thin endpoint in 9D)
- *
- * Phase 9C focus is *discovery* — the install flow goes through the preview
- * modal which gates unverified entries behind a confirmation per the
- * Feb 2026 incident.
+ * The library lives at ~/.hive/skills/<family>/<slug>/SKILL.md and is what
+ * the orchestrator hybrid-searches when equipping agents. Online discovery
+ * (clawhub/cookbook/community) happens ONLY during a manual Sync — the
+ * sources are flaky and skills are tiny text files, so we own the whole
+ * library locally and refresh it every few months.
  */
 import { IconBook2, IconRefresh, IconSearch } from '@tabler/icons-react'
 import clsx from 'clsx'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { SkillCard, type SkillItem } from '../components/skills/SkillCard'
-import { SkillPreviewModal } from '../components/skills/SkillPreviewModal'
+import { useEffect, useMemo, useState } from 'react'
 import { FlowStrip, HeroHeader } from '../components/ui/HeroHeader'
 import { Skeleton } from '../components/ui/Skeleton'
 import { api } from '../lib/api'
-import { slugify } from '../lib/slug'
 
-type SourceFilter = 'all' | 'clawhub' | 'cookbook' | 'community' | 'installed'
-
-interface SearchResponse {
-  items: SkillItem[]
-  fallback: boolean
-  sources_tried: string[]
-  sources_failed: string[]
-  cached_at_age_seconds: number | null
+interface LocalSkill {
+  id: string
+  name: string
+  description: string
+  tags: string[]
+  version: number
+  family: string
 }
 
-const FILTERS: { value: SourceFilter; label: string }[] = [
-  { value: 'all', label: 'All sources' },
-  { value: 'clawhub', label: 'ClawHub' },
-  { value: 'cookbook', label: 'Cookbook' },
-  { value: 'community', label: 'GitHub' },
-  { value: 'installed', label: 'Installed only' },
-]
+interface SyncReport {
+  discovered: number
+  duplicates: number
+  sources_failed: string[]
+  new: string[]
+  updated: string[]
+  unchanged: string[]
+  synthesized: string[]
+  failed: { slug: string; error: string }[]
+  families: Record<string, number>
+  total_in_library: number
+  disk_bytes: number
+}
 
 export function Skills() {
+  const [items, setItems] = useState<LocalSkill[] | null>(null)
   const [query, setQuery] = useState('')
-  const [filter, setFilter] = useState<SourceFilter>('all')
-  const [data, setData] = useState<SearchResponse | null>(null)
-  const [installedIds, setInstalledIds] = useState<Set<string>>(new Set())
-  const [previewing, setPreviewing] = useState<SkillItem | null>(null)
+  const [family, setFamily] = useState<string>('all')
   const [error, setError] = useState<string | null>(null)
-  const [refreshing, setRefreshing] = useState(false)
-  // requestId guards against out-of-order responses: when the user types
-  // fast and an earlier slow request lands after a later fast one, the
-  // earlier response is dropped because its id no longer matches.
-  const requestIdRef = useRef(0)
+  const [syncing, setSyncing] = useState(false)
+  const [lastReport, setLastReport] = useState<SyncReport | null>(null)
 
-  // Hydrate installed skills from the local registry so the "Installed only"
-  // filter survives reloads. Registry skill ids are name slugs.
-  useEffect(() => {
-    void (async () => {
-      try {
-        const res = await api.get<{ items: { id: string }[] }>('/api/registries/skills/installed')
-        setInstalledIds(new Set(res.items.map((i) => i.id)))
-      } catch {
-        // Backend down or old backend without the endpoint — filter stays empty.
-      }
-    })()
-  }, [])
-
-  const load = useCallback(async (force = false) => {
-    const myId = ++requestIdRef.current
-    if (force) setRefreshing(true)
+  async function load() {
     try {
-      const url = new URL('/api/registries/skills/search', 'http://x')
-      if (query) url.searchParams.set('q', query)
-      if (filter !== 'all' && filter !== 'installed') url.searchParams.set('source', filter)
-      if (force) url.searchParams.set('force_refresh', 'true')
-      const res = await api.get<SearchResponse>(url.pathname + url.search)
-      if (myId !== requestIdRef.current) return  // stale — newer request in flight
-      setData(res)
+      const res = await api.get<{ items: LocalSkill[] }>('/api/registries/skills/installed')
+      setItems(res.items)
       setError(null)
     } catch (e) {
-      if (myId !== requestIdRef.current) return
-      setError(e instanceof Error ? e.message : 'Could not load skills')
-    } finally {
-      if (myId === requestIdRef.current) setRefreshing(false)
+      setError(e instanceof Error ? e.message : 'Could not load the local library')
+      setItems([])
     }
-  }, [query, filter])
+  }
 
   useEffect(() => {
-    // 250ms debounce so we don't fire a search per keystroke.
-    const handle = window.setTimeout(() => { void load() }, 250)
-    return () => window.clearTimeout(handle)
-  }, [load])
+    void load()
+  }, [])
 
-  const items = useMemo(() => {
-    if (!data) return []
-    if (filter === 'installed') return data.items.filter((i) => installedIds.has(slugify(i.name)))
-    return data.items
-  }, [data, filter, installedIds])
-
-  function onInstall(skill: SkillItem) {
-    if (skill.auto_install_ok) {
-      void doInstall(skill)
-    } else {
-      setPreviewing(skill)
-    }
-  }
-
-  async function doInstall(skill: SkillItem) {
+  async function runSync() {
+    setSyncing(true)
+    setError(null)
     try {
-      const res = await api.post<{ ok: boolean; skill_id: string }>(
-        '/api/registries/skills/install',
-        {
-          id: skill.id,
-          name: skill.name,
-          description: skill.description,
-          source: skill.source,
-          url: skill.url,
-          tags: skill.tags,
-        },
+      const res = await api.post<{ ok: boolean; report: SyncReport }>(
+        '/api/registries/skills/sync', {},
       )
-      setInstalledIds((prev) => new Set(prev).add(res.skill_id))
+      setLastReport(res.report)
+      await load()
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Install failed')
+      setError(e instanceof Error ? e.message : 'Sync failed')
+    } finally {
+      setSyncing(false)
     }
   }
+
+  const families = useMemo(() => {
+    const fams = new Set((items ?? []).map((s) => s.family))
+    return ['all', ...Array.from(fams).sort()]
+  }, [items])
+
+  const visible = useMemo(() => {
+    let list = items ?? []
+    if (family !== 'all') list = list.filter((s) => s.family === family)
+    const q = query.trim().toLowerCase()
+    if (q) {
+      list = list.filter((s) =>
+        `${s.name} ${s.description} ${s.tags.join(' ')}`.toLowerCase().includes(q),
+      )
+    }
+    return list
+  }, [items, family, query])
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -130,25 +99,26 @@ export function Skills() {
         <HeroHeader
           icon={IconBook2}
           title="Skills"
-          blurb="Reusable instruction packs the orchestrator injects into agents. Type a task, get back the three most relevant — no hand-wiring per project."
+          blurb="Your local library of reusable instruction packs — the orchestrator embeds a task, matches the top 3, and injects them into agents. Online sources are consulted only when you press Sync."
           flow={<FlowStrip steps={['task', 'embed', 'top-3 match', 'inject', 'agent']} />}
           stats={
-            data ? (
+            items ? (
               <span>
-                {data.items.length} found · {data.fallback ? 'offline cache' : 'live'} · {' '}
-                {data.sources_failed.length > 0 ? `${data.sources_failed.length} source(s) unreachable` : 'all sources OK'}
+                {items.length} in library · {families.length - 1} families ·
+                {' '}synced manually
               </span>
             ) : null
           }
           actions={
             <button
               type="button"
-              onClick={() => void load(true)}
-              disabled={refreshing}
+              onClick={() => void runSync()}
+              disabled={syncing}
               className="btn-ghost text-xs inline-flex items-center gap-1.5"
+              title="Re-run online discovery and pull new/updated skills"
             >
-              <IconRefresh size={13} strokeWidth={1.75} className={refreshing ? 'animate-spin' : ''} />
-              Refresh
+              <IconRefresh size={13} strokeWidth={1.75} className={syncing ? 'animate-spin' : ''} />
+              {syncing ? 'Syncing…' : 'Sync'}
             </button>
           }
         />
@@ -158,25 +128,25 @@ export function Skills() {
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search skills by name, tag, or description…"
+            placeholder="Search the local library by name, tag, or description…"
             className="flex-1 bg-transparent outline-none text-sm text-ink placeholder:text-ink-faint"
           />
         </div>
 
         <div className="flex items-center gap-1 flex-wrap">
-          {FILTERS.map((f) => (
+          {families.map((f) => (
             <button
-              key={f.value}
+              key={f}
               type="button"
-              onClick={() => setFilter(f.value)}
+              onClick={() => setFamily(f)}
               className={clsx(
-                'text-xs px-3 py-1.5 rounded-full transition-colors',
-                filter === f.value
+                'text-xs px-3 py-1.5 rounded-full transition-colors capitalize',
+                family === f
                   ? 'bg-accent-gradient text-white'
                   : 'text-ink-muted hover:text-ink hover:bg-surface-2',
               )}
             >
-              {f.label}
+              {f === 'all' ? 'All families' : f}
             </button>
           ))}
         </div>
@@ -187,52 +157,61 @@ export function Skills() {
           </div>
         )}
 
-        {data?.fallback && (
-          <div className="card p-3 bg-amber-500/5 border-amber-500/30 text-xs text-amber-700 dark:text-amber-300">
-            Showing offline cache — couldn't reach{' '}
-            {data.sources_failed.join(', ')}. Results are curated and may be
-            out of date.
+        {lastReport && (
+          <div className="card p-3 text-xs text-ink-muted">
+            Sync: {lastReport.new.length} new · {lastReport.updated.length} updated ·{' '}
+            {lastReport.unchanged.length} unchanged · {lastReport.failed.length} failed
+            {lastReport.synthesized.length > 0 &&
+              ` · ${lastReport.synthesized.length} synthesized from metadata`}
+            {lastReport.sources_failed.length > 0 &&
+              ` · sources unreachable: ${lastReport.sources_failed.join(', ')}`}
+            {' '}— {lastReport.total_in_library} skills,{' '}
+            {(lastReport.disk_bytes / 1024).toFixed(0)} KB
           </div>
         )}
 
-        {!data ? (
-          <SkillsSkeleton />
-        ) : items.length === 0 ? (
+        {!items ? (
+          <div className="grid grid-cols-2 gap-3">
+            {[0, 1, 2, 3, 4, 5].map((i) => (
+              <Skeleton key={i} variant="block" className="h-32" />
+            ))}
+          </div>
+        ) : visible.length === 0 ? (
           <div className="card p-8 text-center text-sm text-ink-muted">
-            No matches. Try a broader query, or switch filter to "All sources".
+            {items.length === 0
+              ? 'The local library is empty — press Sync to download every discoverable skill.'
+              : 'No skills match those filters.'}
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-3">
-            {items.map((s) => (
-              <SkillCard
-                key={s.id}
-                skill={s}
-                installed={installedIds.has(slugify(s.name))}
-                onPreview={setPreviewing}
-                onInstall={onInstall}
-              />
+            {visible.map((s) => (
+              <LocalSkillCard key={s.id} skill={s} />
             ))}
           </div>
         )}
 
         <SecurityNote />
       </div>
-
-      <SkillPreviewModal
-        skill={previewing}
-        onClose={() => setPreviewing(null)}
-        onInstall={(s) => void doInstall(s)}
-      />
     </div>
   )
 }
 
-function SkillsSkeleton() {
+function LocalSkillCard({ skill }: { skill: LocalSkill }) {
   return (
-    <div className="grid grid-cols-2 gap-3">
-      {[0, 1, 2, 3, 4, 5].map((i) => (
-        <Skeleton key={i} variant="block" className="h-32" />
-      ))}
+    <div className="card card-hover p-4 flex flex-col gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="text-sm text-ink truncate max-w-[220px]">{skill.name}</div>
+        <span className="text-[10px] uppercase tracking-wider text-ink-faint border border-line rounded px-1.5 py-px">
+          {skill.family}
+        </span>
+        <span className="text-[10px] text-ink-faint">v{skill.version}</span>
+      </div>
+      <div className="text-xs text-ink-muted line-clamp-3">{skill.description}</div>
+      {skill.tags.length > 0 && (
+        <div className="text-[11px] text-ink-faint truncate">
+          {skill.tags.slice(0, 6).join(' · ')}
+        </div>
+      )}
     </div>
   )
 }
@@ -240,12 +219,11 @@ function SkillsSkeleton() {
 function SecurityNote() {
   return (
     <div className="text-[11px] text-ink-faint leading-relaxed pt-4 border-t border-line">
-      <span className="text-ink-muted">Security</span> — HIVE downloads run through
-      the backend (Python), never the WebView. We auto-allow installs from verified
-      publishers and items with 100+ stars; everything else routes through the
-      preview modal so you can read the SKILL.md before it touches your skills
-      registry. After the February 2026 ClawHub supply-chain incident, we err on
-      the cautious side.
+      <span className="text-ink-muted">Security</span> — downloads run through the
+      backend (Python) against an https allowlist (github.com, raw.githubusercontent.com,
+      clawhub.dev), and only during a manual Sync. Skills that fail validation are
+      skipped and flagged in the report; synthesized entries (no SKILL.md upstream)
+      are marked so you can review them.
     </div>
   )
 }

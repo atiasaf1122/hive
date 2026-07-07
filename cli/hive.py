@@ -494,6 +494,38 @@ def skills_list() -> None:
     asyncio.run(_skills_list_async())
 
 
+@skills_app.command("sync")
+def skills_sync() -> None:
+    """Re-run online discovery and pull new/updated skills into the local
+    library (~/.hive/skills/<family>/<slug>/). Manual only — the online
+    sources are consulted ONLY here, never during normal operation."""
+    from backend.persistence.db import init_db
+    from backend.skills.sync import sync_skills
+
+    async def _run():
+        await init_db()
+        return await sync_skills(force_refresh=True)
+
+    typer.echo("Syncing local skills library (online discovery runs now)…")
+    report = asyncio.run(_run())
+    typer.echo(f"discovered {report['discovered']} "
+               f"({report['duplicates']} duplicate slugs skipped)")
+    if report["sources_failed"]:
+        typer.echo(f"sources unreachable: {', '.join(report['sources_failed'])}")
+    typer.echo(f"new: {len(report['new'])}  updated: {len(report['updated'])}  "
+               f"unchanged: {len(report['unchanged'])}  "
+               f"failed: {len(report['failed'])}")
+    if report["synthesized"]:
+        typer.echo(f"synthesized from metadata (no SKILL.md upstream): "
+                   f"{len(report['synthesized'])}")
+    for f in report["failed"][:10]:
+        typer.echo(f"  FAILED {f['slug']}: {f['error']}")
+    fams = ", ".join(f"{k}={v}" for k, v in sorted(report["families"].items()))
+    typer.echo(f"families: {fams}")
+    typer.echo(f"library: {report['total_in_library']} skills, "
+               f"{report['disk_bytes'] / 1024:.0f} KB on disk")
+
+
 @skills_app.command("import")
 def skills_import(
     path: str = typer.Argument(..., help="Path to SKILL.md file"),

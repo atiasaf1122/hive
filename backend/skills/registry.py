@@ -67,6 +67,13 @@ def _slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9-]", "-", text.lower()).strip("-")
 
 
+def _parse_version(raw: object) -> int:
+    """Lenient version parse — community SKILL.md files use semver strings
+    ('1.2.0'); we keep the integer major so import never dies on it."""
+    m = re.match(r"\d+", str(raw))
+    return int(m.group(0)) if m else 1
+
+
 # ── CRUD ──────────────────────────────────────────────────────────────────────
 
 async def import_skill(path: Path, db_path: Path = DB_PATH) -> Skill:
@@ -78,7 +85,7 @@ async def import_skill(path: Path, db_path: Path = DB_PATH) -> Skill:
     name = frontmatter.get("name") or raw_name
     description = frontmatter.get("description", "").strip()
     tags: list[str] = frontmatter.get("tags") or []
-    version = int(frontmatter.get("version", 1))
+    version = _parse_version(frontmatter.get("version", 1))
 
     if not description:
         raise ValueError(f"{path}: 'description' is required in frontmatter.")

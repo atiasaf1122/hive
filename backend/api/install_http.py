@@ -126,12 +126,15 @@ async def _fetch_skill_body(req: SkillInstallRequest) -> str:
         except Exception as exc:  # noqa: BLE001
             logger.info("Skill body fetch failed for %s: %s — synthesising", raw_url, exc)
 
-    # Synthesised SKILL.md from curated metadata.
+    # Synthesised SKILL.md from curated metadata. Name/description are
+    # JSON-quoted — JSON strings are valid YAML scalars, and unquoted
+    # values containing ": " broke frontmatter parsing for ~40 skills in
+    # the first bulk sync.
     tags_json = json.dumps(req.tags)
     return (
         "---\n"
-        f"name: {req.name}\n"
-        f"description: {req.description}\n"
+        f"name: {json.dumps(req.name)}\n"
+        f"description: {json.dumps(req.description)}\n"
         f"tags: {tags_json}\n"
         f"version: 1\n"
         "---\n\n"
@@ -143,12 +146,20 @@ async def _fetch_skill_body(req: SkillInstallRequest) -> str:
 
 
 def _to_raw_url(url: str) -> str | None:
-    """Heuristic: turn a `github.com/<o>/<r>/tree/<ref>/<path>` URL into the
-    raw SKILL.md URL when possible. For non-GitHub URLs we just return it."""
+    """Heuristic: turn a GitHub URL into the raw SKILL.md URL when possible.
+
+    `/tree/<ref>/<path>` URLs point at the skill folder; bare repo URLs
+    (the common community shape) conventionally keep SKILL.md at the repo
+    root — `HEAD` resolves to the default branch on raw.githubusercontent.
+    For non-GitHub URLs we just return the input."""
     m = re.match(r"https?://github\.com/([^/]+)/([^/]+)/tree/([^/]+)/(.+)$", url)
     if m:
         owner, repo, ref, path = m.groups()
         return f"https://raw.githubusercontent.com/{owner}/{repo}/{ref}/{path}/SKILL.md"
+    m = re.match(r"https?://github\.com/([^/]+)/([^/]+)/?$", url)
+    if m:
+        owner, repo = m.groups()
+        return f"https://raw.githubusercontent.com/{owner}/{repo}/HEAD/SKILL.md"
     return url
 
 
@@ -230,10 +241,30 @@ async def skills_installed() -> dict:
                 "description": s.description,
                 "tags": s.tags,
                 "version": s.version,
+                "family": _family_of(s.path),
             }
             for s in skills
         ]
     }
+
+
+def _family_of(skill_path: str) -> str:
+    """Family = first dir under SKILLS_ROOT (sync layout); flat pre-sync
+    installs read as misc."""
+    try:
+        rel = Path(skill_path).relative_to(SKILLS_ROOT)
+        return rel.parts[0] if len(rel.parts) >= 3 else "misc"
+    except ValueError:
+        return "misc"
+
+
+@router.post("/skills/sync")
+async def skills_sync_endpoint() -> dict:
+    """Run the manual library sync (Part 4) — online discovery happens ONLY
+    here. Blocking for the duration of the downloads."""
+    from backend.skills.sync import sync_skills
+    report = await sync_skills(force_refresh=True)
+    return {"ok": True, "report": report}
 
 
 @router.get("/mcp/installed")

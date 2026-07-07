@@ -124,7 +124,7 @@ async def test_skill_install_writes_skill_md_and_imports(monkeypatch, tmp_path) 
     assert fake_imported, "import_skill was never called"
     written = fake_imported[0]
     assert Path(written).exists()
-    assert "name: cookbook-test" in Path(written).read_text()
+    assert 'name: "cookbook-test"' in Path(written).read_text()
 
 
 # ── MCP install ────────────────────────────────────────────────────────────

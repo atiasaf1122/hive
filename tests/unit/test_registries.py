@@ -238,7 +238,7 @@ def test_skills_installed_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     items = resp.json()["items"]
     assert items == [{
         "id": "git-hygiene", "name": "Git Hygiene", "description": "d",
-        "tags": ["git"], "version": 2,
+        "tags": ["git"], "version": 2, "family": "misc",
     }]
 
 

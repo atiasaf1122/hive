@@ -221,8 +221,11 @@ async def _fetch_clawhub(query: str | None) -> list[dict]:
 
 
 async def _fetch_cookbook(query: str | None) -> list[dict]:
+    # The repo was renamed upstream — GitHub answers with a 301 to the
+    # repository-id URL, so redirects must be followed.
     url = "https://api.github.com/repos/anthropics/anthropic-cookbook/contents/skills"
-    async with httpx.AsyncClient(timeout=8.0, headers=_gh_headers()) as client:
+    async with httpx.AsyncClient(timeout=8.0, headers=_gh_headers(),
+                                 follow_redirects=True) as client:
         resp = await client.get(url)
         resp.raise_for_status()
         data = resp.json()
