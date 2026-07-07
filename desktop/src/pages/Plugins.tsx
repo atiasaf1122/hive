@@ -1,17 +1,14 @@
 /**
- * Plugins — a discovery browser for MCP servers.
+ * Plugins — the swarm's MCP equipment (post-1.0 Part 5).
  *
- * Discovery-only by design: "Add to CLI" writes the server into the user's
- * ~/.claude.json for their *interactive* claude sessions. HIVE agents never
- * read that file — they run with --strict-mcp-config and get their MCP
- * equipment from the curated catalog (backend/mcp/catalog.py), assigned by
- * the planner.
- *
- *   Top tabs: Installed · Discover
- *   Discover: category sidebar + grid
- *   Permission dialog before adding
+ * Primary view: the CURATED catalog (backend/mcp/catalog.py) — the only
+ * servers the planner can equip agents with, shown with live preflight
+ * status. The registry browser is demoted to a "Discover more" tab: it
+ * feeds future catalog proposals and can add servers to YOUR interactive
+ * claude CLI (~/.claude.json) — agents never read that file
+ * (--strict-mcp-config).
  */
-import { IconPlug, IconRefresh, IconSearch } from '@tabler/icons-react'
+import { IconCircleCheck, IconCircleX, IconPlug, IconRefresh, IconSearch } from '@tabler/icons-react'
 import clsx from 'clsx'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { PermissionDialog } from '../components/plugins/PermissionDialog'
@@ -21,7 +18,7 @@ import { Skeleton } from '../components/ui/Skeleton'
 import { api } from '../lib/api'
 import { slugify } from '../lib/slug'
 
-type Tab = 'installed' | 'discover'
+type Tab = 'catalog' | 'discover'
 
 interface MCPResponse {
   items: MCPItem[]
@@ -32,8 +29,21 @@ interface MCPResponse {
   cached_at_age_seconds: number | null
 }
 
+interface CatalogServer {
+  id: string
+  label: string
+  tags: string[]
+  notes: string
+  when_to_use: string
+  requires: string[]
+  per_agent_isolation: boolean
+  preflight_ok: boolean
+  missing: string[]
+}
+
 export function Plugins() {
-  const [tab, setTab] = useState<Tab>('discover')
+  const [tab, setTab] = useState<Tab>('catalog')
+  const [catalog, setCatalog] = useState<CatalogServer[] | null>(null)
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState<string>('all')
   const [data, setData] = useState<MCPResponse | null>(null)
@@ -43,7 +53,7 @@ export function Plugins() {
   const [refreshing, setRefreshing] = useState(false)
   const requestIdRef = useRef(0)
 
-  // Hydrate the Installed tab from the backend so it survives reloads.
+  // Hydrate CLI-config badges (Discover tab) so they survive reloads.
   // Keys in ~/.claude.json mcpServers are name slugs (backend _safe_slug).
   useEffect(() => {
     void (async () => {
@@ -51,7 +61,19 @@ export function Plugins() {
         const res = await api.get<{ items: { key: string }[] }>('/api/registries/mcp/installed')
         setInstalledIds(new Set(res.items.map((i) => i.key)))
       } catch {
-        // Backend down or old backend without the endpoint — tab stays empty.
+        // Backend down or old backend without the endpoint — badges stay off.
+      }
+    })()
+  }, [])
+
+  // The curated catalog — what the swarm can actually use.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await api.get<{ servers: CatalogServer[] }>('/api/mcp/catalog')
+        setCatalog(res.servers)
+      } catch {
+        setCatalog([])
       }
     })()
   }, [])
@@ -81,11 +103,7 @@ export function Plugins() {
     return () => window.clearTimeout(handle)
   }, [load])
 
-  const visibleItems = useMemo(() => {
-    if (!data) return []
-    if (tab === 'installed') return data.items.filter((i) => installedIds.has(slugify(i.name)))
-    return data.items
-  }, [data, tab, installedIds])
+  const visibleItems = useMemo(() => data?.items ?? [], [data])
 
   async function confirmInstall(item: MCPItem) {
     try {
@@ -121,51 +139,64 @@ export function Plugins() {
         <HeroHeader
           icon={IconPlug}
           title="Plugins"
-          blurb="A discovery browser for Model Context Protocol servers. Adding one here equips YOUR interactive claude CLI (~/.claude.json) — HIVE agents get their MCP equipment from the curated catalog (playwright, github, context7, filesystem), assigned per-task by the planner."
-          flow={<FlowStrip steps={['browse', 'add to CLI', 'your claude sessions']} />}
+          blurb="The swarm's MCP equipment. The curated catalog below is what the planner can assign to agents, with live readiness checks. Discover more browses the public registry — it feeds future catalog proposals and can equip YOUR interactive claude CLI (never the agents)."
+          flow={<FlowStrip steps={['curated catalog', 'planner assigns', 'agent equipped']} />}
           stats={
-            data ? (
+            catalog ? (
               <span>
-                {data.items.length} available · {installedIds.size} in your CLI config · {' '}
-                {data.fallback ? 'offline cache' : 'live'}
+                {catalog.length} in the swarm catalog ·{' '}
+                {catalog.filter((s) => s.preflight_ok).length} ready ·{' '}
+                {installedIds.size} in your CLI config
               </span>
             ) : null
           }
           actions={
-            <button
-              type="button"
-              onClick={() => void load(true)}
-              disabled={refreshing}
-              className="btn-ghost text-xs inline-flex items-center gap-1.5"
-            >
-              <IconRefresh size={13} strokeWidth={1.75} className={refreshing ? 'animate-spin' : ''} />
-              Refresh
-            </button>
+            tab === 'discover' ? (
+              <button
+                type="button"
+                onClick={() => void load(true)}
+                disabled={refreshing}
+                className="btn-ghost text-xs inline-flex items-center gap-1.5"
+              >
+                <IconRefresh size={13} strokeWidth={1.75} className={refreshing ? 'animate-spin' : ''} />
+                Refresh
+              </button>
+            ) : null
           }
         />
 
         {/* Top tab bar */}
         <div className="inline-flex items-center bg-surface-2 border border-line rounded-full p-0.5 text-xs">
-          {(['installed', 'discover'] as Tab[]).map((t) => (
+          {(['catalog', 'discover'] as Tab[]).map((t) => (
             <button
               key={t}
               type="button"
               onClick={() => setTab(t)}
               className={clsx(
-                'px-3.5 py-1.5 rounded-full transition-colors capitalize',
+                'px-3.5 py-1.5 rounded-full transition-colors',
                 tab === t ? 'bg-accent-gradient text-white' : 'text-ink-muted hover:text-ink',
               )}
             >
-              {t}
-              {t === 'installed' && installedIds.size > 0 && (
-                <span className={clsx('ml-1.5 text-[10px]', tab === t ? 'text-white/80' : 'text-ink-faint')}>
-                  {installedIds.size}
-                </span>
-              )}
+              {t === 'catalog' ? 'Swarm catalog' : 'Discover more'}
             </button>
           ))}
         </div>
 
+        {tab === 'catalog' ? (
+          !catalog ? (
+            <div className="grid grid-cols-2 gap-3">
+              {[0, 1, 2, 3].map((i) => (
+                <Skeleton key={i} variant="block" />
+              ))}
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              {catalog.map((s) => (
+                <CatalogCard key={s.id} server={s} />
+              ))}
+            </div>
+          )
+        ) : (
         <div className="grid grid-cols-[180px_1fr] gap-6">
           <aside>
               <div className="text-xs text-ink-muted mb-2">Categories</div>
@@ -208,9 +239,7 @@ export function Plugins() {
                 </div>
               ) : visibleItems.length === 0 ? (
                 <div className="card p-8 text-center text-sm text-ink-muted">
-                  {tab === 'installed'
-                    ? 'Nothing in your CLI config yet. Switch to Discover to browse.'
-                    : 'No MCP servers match those filters.'}
+                  No MCP servers match those filters.
                 </div>
               ) : (
                 <div className="grid grid-cols-2 gap-3">
@@ -226,6 +255,7 @@ export function Plugins() {
               )}
             </div>
         </div>
+        )}
       </div>
 
       <PermissionDialog
@@ -233,6 +263,39 @@ export function Plugins() {
         onClose={() => setPendingInstall(null)}
         onConfirm={confirmInstall}
       />
+    </div>
+  )
+}
+
+function CatalogCard({ server }: { server: CatalogServer }) {
+  return (
+    <div className="card card-hover p-4 flex flex-col gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="text-sm text-ink">{server.label}</div>
+        {server.preflight_ok ? (
+          <span className="text-[10px] text-emerald-500 inline-flex items-center gap-1">
+            <IconCircleCheck size={11} /> ready
+          </span>
+        ) : (
+          <span className="text-[10px] text-amber-500 inline-flex items-center gap-1">
+            <IconCircleX size={11} /> not ready
+          </span>
+        )}
+        {server.per_agent_isolation && (
+          <span className="text-[10px] uppercase tracking-wider text-ink-faint border border-line rounded px-1.5 py-px">
+            per-agent
+          </span>
+        )}
+      </div>
+      <div className="text-xs text-ink-muted">{server.when_to_use}</div>
+      {!server.preflight_ok && server.missing.length > 0 && (
+        <div className="text-[11px] text-amber-600 dark:text-amber-400">
+          {server.missing.join('; ')}
+        </div>
+      )}
+      <div className="text-[11px] text-ink-faint truncate">
+        {server.tags.slice(0, 6).join(' · ')}
+      </div>
     </div>
   )
 }

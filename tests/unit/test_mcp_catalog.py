@@ -15,8 +15,10 @@ from backend.mcp.catalog import (
 )
 
 
-def test_catalog_has_the_four_servers() -> None:
-    assert set(CATALOG) == {"playwright", "github", "context7", "filesystem"}
+def test_catalog_has_the_approved_six_servers() -> None:
+    """Part 5 (approved): keep 4 + postgres + youtube-transcript."""
+    assert set(CATALOG) == {"playwright", "github", "context7", "filesystem",
+                            "postgres", "youtube-transcript"}
 
 
 def test_isolated_servers_have_isolation_args() -> None:
@@ -104,8 +106,35 @@ def test_catalog_endpoint() -> None:
         resp = client.get("/api/mcp/catalog")
     assert resp.status_code == 200
     servers = {s["id"]: s for s in resp.json()["servers"]}
-    assert set(servers) == {"playwright", "github", "context7", "filesystem"}
+    assert set(servers) == {"playwright", "github", "context7", "filesystem",
+                            "postgres", "youtube-transcript"}
     for s in servers.values():
         assert "preflight_ok" in s and "missing" in s
     # Secrets never leak: header values are still ${VAR} templates.
     assert servers["github"]["headers"]["Authorization"] == "Bearer ${GITHUB_TOKEN}"
+
+
+def test_render_postgres_expands_url_env_in_args(monkeypatch) -> None:
+    monkeypatch.setenv("POSTGRES_URL", "postgresql://u:p@localhost/forecast")
+    cfg = render_mcp_config(["postgres"], "agent-1", "/tmp/wt")
+    args = cfg["mcpServers"]["postgres"]["args"]
+    assert args[-1] == "postgresql://u:p@localhost/forecast"
+
+
+def test_render_postgres_without_url_raises(monkeypatch) -> None:
+    monkeypatch.delenv("POSTGRES_URL", raising=False)
+    with pytest.raises(ValueError):
+        render_mcp_config(["postgres"], "agent-1", "/tmp/wt")
+
+
+def test_preflight_postgres_flags_missing_url(monkeypatch) -> None:
+    monkeypatch.delenv("POSTGRES_URL", raising=False)
+    missing = preflight(get_spec("postgres"))
+    assert any("POSTGRES_URL" in m for m in missing)
+
+
+def test_youtube_transcript_needs_no_secrets() -> None:
+    spec = get_spec("youtube-transcript")
+    assert all(not r.startswith("env:") for r in spec.requires)
+    cfg = render_mcp_config(["youtube-transcript"], "agent-1", "/tmp/wt")
+    assert "@kimtaeyoon83/mcp-server-youtube-transcript" in         cfg["mcpServers"]["youtube-transcript"]["args"]

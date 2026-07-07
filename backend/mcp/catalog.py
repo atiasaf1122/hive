@@ -121,6 +121,51 @@ CATALOG: dict[str, MCPServerSpec] = {
             ),
         ),
         MCPServerSpec(
+            id="postgres",
+            label="Postgres (read-only queries)",
+            command="npx",
+            # Official reference server — read-only transactions + schema
+            # introspection. Archived upstream (Anthropic moved reference
+            # servers to servers-archived) but still the de-facto standard
+            # and npm-installable; revisit if a maintained successor wins.
+            # The value over raw psql-in-Bash is the ENFORCED read-only
+            # transaction — a worker can't accidentally write.
+            args=["-y", "@modelcontextprotocol/server-postgres",
+                  "${POSTGRES_URL}"],
+            tags=["postgres", "sql", "database", "schema"],
+            requires=["node>=20", "env:POSTGRES_URL"],
+            notes=(
+                "Read-only Postgres access. Set POSTGRES_URL to the "
+                "connection string (postgresql://user:pass@host/db) of the "
+                "project's database."
+            ),
+            when_to_use=(
+                "When the subtask inspects a Postgres schema or answers "
+                "questions from live data (e.g. the forecasting app's DB). "
+                "NOT for writing app code that merely uses a database, and "
+                "NOT for SQLite (workers query SQLite via python in Bash)."
+            ),
+        ),
+        MCPServerSpec(
+            id="youtube-transcript",
+            label="YouTube transcripts",
+            command="npx",
+            args=["-y", "@kimtaeyoon83/mcp-server-youtube-transcript"],
+            tags=["youtube", "transcript", "media", "research"],
+            requires=["node>=20"],
+            notes=(
+                "Fetches YouTube video transcripts (no API key). The "
+                "media-pipeline entry point: transcript in, summaries/"
+                "scripts/research out."
+            ),
+            when_to_use=(
+                "When the subtask needs the CONTENT of YouTube videos — "
+                "summarize a talk, research a topic across videos, feed a "
+                "media pipeline. NOT for downloading video/audio files "
+                "(that's yt-dlp in Bash)."
+            ),
+        ),
+        MCPServerSpec(
             id="filesystem",
             label="Filesystem (cross-project reads)",
             command="npx",
@@ -200,6 +245,35 @@ def _expand_placeholders(value: str, agent_id: str, worktree: str) -> str:
     )
 
 
+def _expand_env_args(args: list[str]) -> list[str]:
+    """Resolve ${VAR} / ${VAR:optional} references inside args.
+
+    Same semantics as _expand_env_map: a missing required var raises
+    (preflight catches it first); an arg whose optional var is unset is
+    dropped from the list entirely.
+    """
+    out: list[str] = []
+    for value in args:
+        drop = False
+
+        def _sub(m: re.Match) -> str:
+            nonlocal drop
+            resolved = os.environ.get(m.group("name"))
+            if resolved:
+                return resolved
+            if m.group("opt"):
+                drop = True
+                return ""
+            raise ValueError(
+                f"required environment variable {m.group('name')} is not set"
+            )
+
+        expanded = _ENV_RE.sub(_sub, value)
+        if not drop:
+            out.append(expanded)
+    return out
+
+
 def _expand_env_map(raw: dict[str, str]) -> dict[str, str]:
     """Resolve ${VAR} / ${VAR:optional} references against os.environ.
 
@@ -251,10 +325,10 @@ def render_mcp_config(
             }
             continue
 
-        args = [
+        args = _expand_env_args([
             _expand_placeholders(a, agent_id, worktree)
             for a in (*spec.args, *spec.isolation_args)
-        ]
+        ])
         entry: dict = {"command": spec.command, "args": args}
         env = _expand_env_map(spec.env)
         if env:
