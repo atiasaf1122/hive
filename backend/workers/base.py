@@ -27,6 +27,9 @@ class EventType(StrEnum):
     ESTIMATE_ACTUAL = "estimate/actual"
     # E2: a local worker fell back to a Claude tier (VRAM headroom gone).
     MODEL_FALLBACK = "model/fallback"
+    # Post-1.0 Part 2: discovery saw a new local model (or a new digest of
+    # a known one) — surfaced as an audition nudge, never auto-run.
+    MODEL_DISCOVERED = "model/discovered"
     # E3: task-shape router decision (solo/swarm/chat + reasoning).
     TASK_SHAPE = "task/shape"
     # F1: the PreToolUse guard denied a catastrophic command. origin=agent

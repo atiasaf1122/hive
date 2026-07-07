@@ -72,6 +72,62 @@ def status() -> None:
 golden_app = typer.Typer(help="Golden regression suite (D5) — real models, real cost")
 app.add_typer(golden_app, name="golden")
 
+models_app = typer.Typer(help="Local (Ollama) model pool — list, audition")
+app.add_typer(models_app, name="models")
+
+
+@models_app.command("list")
+def models_list() -> None:
+    """Discovered local models with capabilities and provenance."""
+    import asyncio as _asyncio
+
+    from backend.models_local import discover_local_models
+    from backend.persistence.db import init_db
+
+    async def _run():
+        await init_db()
+        return await discover_local_models()
+
+    models = _asyncio.run(_run())
+    if not models:
+        typer.echo("No local models (is Ollama running?)")
+        raise typer.Exit(code=0)
+    for m in models:
+        avail = "available" if m.available else f"unavailable ({m.unavailable_reason})"
+        typer.echo(f"{m.name:32s} {m.size_gb:5.1f}GB  [{m.provenance:8s}] "
+                   f"{', '.join(sorted(m.capabilities))} — {avail}")
+
+
+@models_app.command("audition")
+def models_audition(model: str) -> None:
+    """Measure a local model's real capabilities with fixed micro-tasks
+    (code+pytest, summary graded by Haiku, classification exact-match).
+    Results override name/metadata inference in the planner digest."""
+    import asyncio as _asyncio
+
+    from backend.models_local import audition_model
+    from backend.persistence.db import init_db
+
+    typer.echo(f"Auditioning {model} — 3 micro-tasks, local generation "
+               "($0) + one tiny Haiku grade…")
+
+    async def _run():
+        await init_db()
+        return await audition_model(model)
+
+    measured = _asyncio.run(_run())
+    results = measured.get("results", {})
+    cls = results.get("classification", {})
+    summ = results.get("summarization", {})
+    code = results.get("coding", {})
+    typer.echo(f"  classification: {cls.get('score')}/5  "
+               f"{'PASS' if cls.get('passed') else 'fail'}")
+    typer.echo(f"  summarization:  {summ.get('score')}/10 "
+               f"{'PASS' if summ.get('passed') else 'fail'}")
+    typer.echo(f"  coding(pytest): {'PASS' if code.get('passed') else 'fail'}")
+    caps = ", ".join(measured.get("capabilities") or []) or "(none)"
+    typer.echo(f"Measured capabilities stored: {caps}")
+
 
 @golden_app.command("run")
 def golden_run(

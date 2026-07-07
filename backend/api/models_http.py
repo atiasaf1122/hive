@@ -10,6 +10,25 @@ from backend.resources import vram_manager
 router = APIRouter(prefix="/api/models")
 
 
+@router.get("/local/nudge")
+async def local_models_nudge() -> dict:
+    """Models discovered but never auditioned — 'new local model detected,
+    audition it?'. Informational only; auditions never auto-run."""
+    from backend.models_local import unauditioned_models
+    pending = await unauditioned_models()
+    return {"nudge": bool(pending), "models": pending}
+
+
+@router.post("/local/audition/{model_name:path}")
+async def local_model_audition(model_name: str) -> dict:
+    """Run the fixed audition micro-tasks against one local model and store
+    measured capabilities. Blocking (a few minutes of local generation +
+    one tiny Haiku grade) — the desktop calls this from a button."""
+    from backend.models_local import audition_model
+    measured = await audition_model(model_name)
+    return {"ok": True, "model": model_name, "measured": measured}
+
+
 @router.get("/local")
 async def local_models() -> dict:
     models = await discover_local_models()

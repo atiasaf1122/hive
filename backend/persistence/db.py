@@ -183,6 +183,19 @@ CREATE TABLE IF NOT EXISTS pending_approvals (
 );
 CREATE INDEX IF NOT EXISTS idx_pending_approvals_session ON pending_approvals(session_id);
 CREATE INDEX IF NOT EXISTS idx_pending_approvals_status  ON pending_approvals(status);
+
+-- Local-model probe cache (post-1.0 Part 2): /api/show metadata per
+-- (model, digest) so we probe once per model VERSION, not per plan; plus
+-- audition results (measured capabilities) that override inference.
+CREATE TABLE IF NOT EXISTS local_model_probes (
+    model         TEXT NOT NULL,
+    digest        TEXT NOT NULL DEFAULT '',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    measured_json TEXT,                       -- NULL until auditioned
+    discovered_at TEXT DEFAULT (datetime('now')),
+    measured_at   TEXT,
+    PRIMARY KEY (model, digest)
+);
 """
 
 

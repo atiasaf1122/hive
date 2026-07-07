@@ -319,11 +319,15 @@ async def _local_models_digest() -> str:
     lines = ["Local models (FREE — cost $0, run on the user's own GPUs):"]
     lines += [
         f'- "local:{m.name}" — {m.tier_equivalence}; good for: '
-        f"{', '.join(sorted(m.capabilities))}"
+        f"{', '.join(sorted(m.capabilities))} [{m.provenance}]"
         for m in models
     ]
     lines += [
         "Routing guidance:",
+        "- Capability provenance: [measured] was verified by a real audition —",
+        "  trust it; [inferred] comes from model metadata/name patterns;",
+        "  [default] is a conservative guess. Prefer measured over inferred",
+        "  over default when choosing between local models.",
         "- Local models cost $0 — prefer them for mechanical edits, boilerplate,",
         "  renames, config changes, test scaffolding from clear specs, doc updates,",
         "  and high-volume repetitive subtasks.",
