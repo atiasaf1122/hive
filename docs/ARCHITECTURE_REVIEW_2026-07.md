@@ -595,6 +595,85 @@ navigational gain. Don't.
 
 # Progress log (newest first)
 
+## 2026-07-07 — Post-1.0 session: 2 live-bug clusters fixed + 4 upgrades (Parts 1–6)
+
+Six parts from real first-use findings. Tests 623 → **655 passing**. Golden
+suite at close-out: **9/10, then 10/10** — lessons-injection failed once
+(its claude:haiku Writer died at spawn with ZERO emitted events and zero
+cost; no instant-fail path matches, breaker was fresh, classifier/plan were
+correct) and passed cleanly on re-run — this time the planner put the
+Writer on **ollama:gemma4:latest**, a model pulled after the resolver
+shipped, classified live by the new inference rules and listed by the
+audition nudge alongside the other two locals. Flag carried forward: a
+worker that dies with an EMPTY event stream records no cause anywhere —
+add a terminal diagnostic (exit code / stderr tail) when zero events were
+emitted. Six commits (one per part + close-out).
+
+- **Part 1 — chat duplication BUG: the layer was the WS TRANSPORT.**
+  Reproduced with 3 keyword turns, then captured live WS frames. Persisted
+  history and the model's replies were clean (layers a+b exonerated); the
+  frontend sends `resume_from: 0` on every ProjectView mount and the WS
+  endpoint treated 0 as "replay the ENTIRE ring", re-appending every prior
+  orchestrator_response on top of the fetched /history — plus stale queue
+  backlog (turns finished with no client attached) delivered on top.
+  Affects ALL session shapes, not just CHAT. Fix in ws.py: resume 0/absent
+  = fresh client → live-only + backlog skipped; resume>0 within ring =
+  replay exactly the gap once; stale ids from a dead process = fresh.
+  Verified live: 5 turns of backlog, fresh mount receives only the new
+  reply. 3 regression tests (test_ws_resume.py).
+- **Part 3 — 49641e2b forensics corrected the report**: "what can i do
+  with hive?" was correctly CHAT (event 12111) and answered; the SOLO
+  Writer came from the FOLLOW-UP ("give me a small prompt…"), a
+  text-deliverable request. Rubric now routes capability questions and
+  text-deliverables (prompts/advice/plans, even imperative) to CHAT; solo
+  requires an explicit on-disk artifact. Solo wrap-ups stop repeating the
+  "On it — routing…" line as if it answered ("Here's what the agent
+  produced this turn:"). Stuck spinner = stale pre-sync frontend missing
+  the awaiting_user planner-log clear + the Part-1 replay bug; solo
+  completion emitting orchestrator_response + awaiting_user is now pinned
+  by tests.
+- **Part 2 — three-layer local-model resolver** (models_local.py):
+  /api/show metadata cached per (model, digest) in SQLite (probe once per
+  VERSION); inference rules in one table (coder families + size tiers —
+  fictional "qwen5-coder:40b" resolves full-coding by pattern+size;
+  unknown family stays conservative); `hive models audition <model>` runs
+  fixed $0 micro-tasks (median function w/ real pytest, summary graded
+  0-10 by Haiku, 5-way classification) storing MEASURED caps that
+  override inference. Planner digest marks [measured|inferred|default]
+  and prefers measured. New digests emit MODEL_DISCOVERED + GET
+  /api/models/local/nudge (informational, no auto-runs).
+- **Part 4 — local skills library**: `hive skills sync` bulk-downloaded
+  the discoverable universe into ~/.hive/skills/<family>/<slug>/ —
+  **110 skills, 524 KB, 0 failures** (frontend=29 backend=27 devops=21
+  misc=10 ai-agents=9 data=9 docs-writing=5; 94 synthesized from metadata,
+  flagged). Online sources consulted ONLY during sync. Three root fixes
+  from the bulk run: synthesized frontmatter now JSON-quoted (": " broke
+  YAML for ~40), semver versions parse leniently, cookbook fetcher follows
+  GitHub's 301 (source restored). Skills page = local-library browser
+  (search + family filter + Sync button).
+- **Part 5 — curated MCP catalog: 4 → 6 (approved: "7 minus sqlite")**.
+  Added postgres (official read-only reference, POSTGRES_URL preflight)
+  and youtube-transcript (@kimtaeyoon83, npx, no key). Rejected with
+  reasons: search/fetch MCPs duplicate workers' built-in
+  WebSearch/WebFetch; git/sqlite ride on Bash; memory duplicates lessons;
+  whisper/piper/comfyui have no vetted runnable packages (some need
+  OPENAI_API_KEY — stack lock); comms servers aren't swarm equipment.
+  Plugins page: primary tab = Swarm catalog with live preflight,
+  registry browser demoted to "Discover more".
+- **Part 6 — the X performs the hermetic shutdown**: POST
+  /api/lifecycle/shutdown (workers via stop-hive-wsl.sh --workers-only —
+  kill pattern lives in ONE place — then graceful self-exit);
+  CloseConfirmation calls it on all closing paths except close-to-tray;
+  mid-work confirm dialog kept. `wsl --shutdown` stays exclusive to the
+  Stop script, now reframed as the fallback/repair tool (.lnk description
+  updated). Two bugs found live: **confirm_close used window.close(),
+  which re-enters the prevent+emit handler — an infinite loop; the X had
+  NEVER actually closed the app** (now window.destroy()); and the worker
+  kill pattern matched processes that merely mention it (both killers now
+  skip cmdlines containing a literal ".*"). Verified live: X → backend
+  gone in 4s, app + dev tooling gone, zero orphans, interactive claude
+  untouched. Daily flow: launch icon to start, X to stop.
+
 ## 2026-07-07 — Q&A audit follow-ups: Plugins discovery-only, installed-list endpoints, Windows copy synced
 
 All four recommendations from the audit entry below are now DONE:
