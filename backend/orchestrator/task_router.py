@@ -37,8 +37,15 @@ _RUBRIC = """Classify a user request for an AI coding-agent system. Reply with O
 {{"shape": "solo" | "swarm" | "chat", "role": "Builder|Writer|Editor|Researcher", "mechanical": true/false, "needs_tools": true/false, "reason": "one short line"}}
 
 - "chat": a question, discussion, opinion, or explanation — NO file changes requested.
+  Questions about this system itself or its capabilities ("what can I do with hive?",
+  "how does X work here?") are chat. So is ANY request whose deliverable is text the
+  user will read or copy from the chat — a prompt to use, advice, a plan, an example,
+  a query — even when phrased imperatively ("give me a prompt...", "write me a
+  one-liner..."): answer it in the conversation. Route solo/swarm only when the user
+  names a file/artifact to create or change, or asks for work to be saved/applied.
 - "solo": ONE focused change with clear scope (one file/concern): fix a typo, rename X,
-  add a null check, tweak a config, write one small file/doc.
+  add a null check, tweak a config, write one small file/doc the user explicitly wants
+  created on disk.
 - "swarm": multi-part or multi-file work, anything needing decomposition, design, or
   exploration. IN PARTICULAR: any task naming two deliverables that must AGREE with each
   other — an API AND a test suite for it, a module AND the code that consumes it, an

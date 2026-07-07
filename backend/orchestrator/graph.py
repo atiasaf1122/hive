@@ -200,6 +200,11 @@ async def orchestrator_node(state: GraphState) -> dict:
         )
 
     composition_dict = _composition_to_dict(decision.composition)
+    if solo:
+        # Marker read by review_node: a solo turn's wrap-up must present the
+        # deliverable as WORK PRODUCED, not repeat the routing status line as
+        # if the deliverable answered the user's message (session 49641e2b).
+        composition_dict["solo"] = True
 
     # F4.2: surface parse-time wave resequencing (a produce/consume
     # dependency that would have dead-locked in one wave was moved).
@@ -778,7 +783,15 @@ async def review_node(state: GraphState) -> dict:
     all_failed = len(report.failed_agents) > 0 and len(report.merged) == 0
     turn_status = "failed" if all_failed else "completed"
 
-    summary = state.get("last_response", "") or ""
+    solo_turn = bool((state.get("team_composition") or {}).get("solo"))
+    if solo_turn:
+        # Solo turns: last_response is the "On it — routing this as a single
+        # X task" status line, already shown when the turn started. Repeating
+        # it here made the wrap-up narrate the deliverable as if it answered
+        # the user's message (49641e2b). Frame it as produced work instead.
+        summary = "Here's what the agent produced this turn:" if combined_text else ""
+    else:
+        summary = state.get("last_response", "") or ""
     if combined_text:
         summary = (summary + "\n\n" if summary else "") + combined_text
 
