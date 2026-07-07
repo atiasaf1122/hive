@@ -200,15 +200,12 @@ async def test_mcp_query_filter(monkeypatch: pytest.MonkeyPatch) -> None:
 
 # ── HTTP integration ────────────────────────────────────────────────────────
 
-def test_skills_search_endpoint() -> None:
+def test_skills_search_endpoint_removed() -> None:
+    """Close-out: the online skills-search proxy is gone — discovery lives
+    only inside the sync flow (Skills page browses the local library)."""
     with TestClient(app) as client:
-        # Force fallback (no monkeypatch from here — we accept whatever the
-        # tested env returns, just assert envelope shape).
         resp = client.get("/api/registries/skills/search?source=all")
-    assert resp.status_code == 200
-    body = resp.json()
-    for key in ("items", "fallback", "sources_tried", "sources_failed"):
-        assert key in body
+    assert resp.status_code == 404
 
 
 def test_mcp_list_endpoint() -> None:

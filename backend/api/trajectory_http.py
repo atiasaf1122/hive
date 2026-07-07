@@ -14,7 +14,9 @@ from backend.workers.base import EventType
 
 router = APIRouter(prefix="/api/sessions")
 
-# event type → (category, human title builder)
+# event type → (category, human title builder). Post-1.0 close-out: every
+# EventType added after D7 shipped gets a mapping — no event type may fall
+# through as an unstyled "other" blob (a test enforces this).
 _CATEGORY: dict[str, str] = {
     str(EventType.AGENT_START): "lifecycle",
     str(EventType.AGENT_END): "lifecycle",
@@ -22,7 +24,9 @@ _CATEGORY: dict[str, str] = {
     str(EventType.MCP_ATTACHED): "mcp",
     str(EventType.VALIDATION_FAILED): "validation",
     str(EventType.REVIEW_LLM): "review",
+    str(EventType.LESSON_STORED): "lesson",
     str(EventType.LESSON_DISCARDED): "lesson",
+    str(EventType.LESSON_NONE): "lesson",
     str(EventType.COMPACTION): "compaction",
     str(EventType.ESTIMATE_ACTUAL): "estimate",
     str(EventType.TOOL_USE): "tool",
@@ -31,6 +35,14 @@ _CATEGORY: dict[str, str] = {
     str(EventType.TEXT_DONE): "text",
     str(EventType.COST): "cost",
     str(EventType.RATE_LIMIT): "error",
+    # E-phase and later
+    str(EventType.TASK_SHAPE): "routing",
+    str(EventType.MODEL_FALLBACK): "model",
+    str(EventType.MODEL_DISCOVERED): "model",
+    str(EventType.GUARD_TRIPPED): "guard",
+    str(EventType.SALVAGE_REVIEW): "review",
+    str(EventType.PLAN_ADJUSTED): "plan",
+    str(EventType.CLASSIFIER_DISAGREEMENT): "routing",
 }
 
 
@@ -66,6 +78,29 @@ def _title(ev: dict) -> str:
                 f"${payload.get('cost_usd') or 0:.4f}")
     if etype == str(EventType.TEXT_DONE):
         return (payload.get("text") or "")[:150]
+    if etype == str(EventType.LESSON_STORED):
+        return f"lesson stored: {raw.get('title') or ''}"[:150]
+    if etype == str(EventType.LESSON_NONE):
+        return "no lesson distilled this session"
+    if etype == str(EventType.TASK_SHAPE):
+        via = "override" if raw.get("override") else raw.get("engine", "")
+        return f"routed as {str(raw.get('shape', '')).upper()} via {via}: {raw.get('reasoning', '')}"[:150]
+    if etype == str(EventType.MODEL_FALLBACK):
+        return f"model fallback {raw.get('from')} → {raw.get('to')} ({raw.get('reason', '')})"[:150]
+    if etype == str(EventType.MODEL_DISCOVERED):
+        return f"new local model discovered: {raw.get('model')} ({raw.get('size_gb')}GB)"
+    if etype == str(EventType.GUARD_TRIPPED):
+        return f"guard DENIED: {raw.get('command', '')} — {raw.get('reason', '')}"[:150]
+    if etype == str(EventType.SALVAGE_REVIEW):
+        return f"salvage {raw.get('action')}: {raw.get('reasoning', '')}"[:150]
+    if etype == str(EventType.PLAN_ADJUSTED):
+        if raw.get("kind") == "resequenced":
+            return (f"plan adjusted: {raw.get('consumer')} resequenced after "
+                    f"{raw.get('producer')} (wave {raw.get('wave')})")
+        return f"plan adjusted: {raw.get('kind')} {raw.get('role', '')} on {', '.join(raw.get('files') or [])}"[:150]
+    if etype == str(EventType.CLASSIFIER_DISAGREEMENT):
+        return ("classifier said needs_tools=false but keywords disagree — "
+                "routed safe (tools)")
     return etype
 
 

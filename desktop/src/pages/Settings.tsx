@@ -12,6 +12,7 @@ import {
   IconShieldLock,
 } from '@tabler/icons-react'
 import { useEffect, useMemo, useState } from 'react'
+import { api } from '../lib/api'
 import { useOnboarding } from '../stores/onboarding'
 import {
   ACCENT_PALETTES,
@@ -37,9 +38,32 @@ const MODEL_CHOICES = [
   { value: 'claude:opus',    label: 'Claude Opus',          tier: 'premium',  costlyAsWorker: true  },
   { value: 'claude:sonnet',  label: 'Claude Sonnet',        tier: 'standard', costlyAsWorker: false },
   { value: 'claude:haiku',   label: 'Claude Haiku',         tier: 'cheap',    costlyAsWorker: false },
-  { value: 'ollama:llama3.1', label: 'Ollama · Llama 3.1',  tier: 'local',    costlyAsWorker: false },
-  { value: 'ollama:qwen2.5', label: 'Ollama · Qwen 2.5',    tier: 'local',    costlyAsWorker: false },
 ] as const
+
+interface ModelChoice {
+  value: string
+  label: string
+  tier: string
+  costlyAsWorker: boolean
+}
+
+/** Claude tiers plus whatever Ollama actually has pulled right now —
+ *  the old hardcoded llama3.1/qwen2.5 entries pointed at models that
+ *  were never in the pool. */
+function useModelChoices(): ModelChoice[] {
+  const [local, setLocal] = useState<ModelChoice[]>([])
+  useEffect(() => {
+    api.get<{ models: { name: string }[] }>('/api/models/local')
+      .then((res) => setLocal(res.models.map((m) => ({
+        value: `ollama:${m.name}`,
+        label: `Ollama · ${m.name}`,
+        tier: 'local',
+        costlyAsWorker: false,
+      }))))
+      .catch(() => setLocal([]))
+  }, [])
+  return [...MODEL_CHOICES, ...local]
+}
 
 const ROUTING_OPTIONS: { value: RoutingStrategy; label: string; hint: string }[] = [
   { value: 'cloud-first', label: 'Cloud first',  hint: 'Prefer Claude for everything. Ollama as fallback.' },
@@ -259,8 +283,70 @@ function AIPanel() {
             className="input-soft text-sm w-64 font-mono"
           />
         </SettingRow>
+        <AuditionNudge />
       </SettingCard>
     </>
+  )
+}
+
+/** Post-1.0 Part 2: "new local model detected — audition it?". Auditioning
+ *  stores measured capabilities (overriding name/metadata inference in the
+ *  planner digest) and drops the model from this nudge. */
+function AuditionNudge() {
+  const [pending, setPending] = useState<{ model: string }[]>([])
+  const [running, setRunning] = useState<string | null>(null)
+
+  async function refresh() {
+    try {
+      const res = await api.get<{ nudge: boolean; models: { model: string }[] }>(
+        '/api/models/local/nudge',
+      )
+      setPending(res.models)
+    } catch {
+      setPending([])
+    }
+  }
+
+  useEffect(() => {
+    void refresh()
+  }, [])
+
+  async function audition(model: string) {
+    setRunning(model)
+    try {
+      await api.post(`/api/models/local/audition/${model}`, {})
+      await refresh() // measured results stored → the nudge clears itself
+    } catch {
+      /* audition failed (Ollama down?) — nudge stays, user can retry */
+    } finally {
+      setRunning(null)
+    }
+  }
+
+  if (pending.length === 0) return null
+  return (
+    <div className="mt-3 p-3 rounded-soft bg-amber-500/10 border border-amber-500/30">
+      <div className="text-xs font-medium text-amber-600 dark:text-amber-400 mb-1.5">
+        New local model{pending.length === 1 ? '' : 's'} detected — audition
+        {pending.length === 1 ? ' it' : ' them'}? ($0 local micro-tasks + one
+        tiny Haiku grade; measured capabilities override guesses)
+      </div>
+      <ul className="space-y-1">
+        {pending.map((m) => (
+          <li key={m.model} className="flex items-center gap-2 text-xs text-ink-muted">
+            <span className="font-mono">{m.model}</span>
+            <button
+              type="button"
+              disabled={running !== null}
+              onClick={() => void audition(m.model)}
+              className="btn-ghost text-[11px]"
+            >
+              {running === m.model ? 'Auditioning… (a few minutes)' : 'Audition'}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
   )
 }
 
@@ -274,9 +360,11 @@ function ModelSelect({
   /** 'worker' adds a (costly) badge to Opus and confirms the pick. */
   kind?: 'orchestrator' | 'worker'
 }) {
+  const choices = useModelChoices()
+
   function handleChange(next: string) {
     if (kind === 'worker') {
-      const choice = MODEL_CHOICES.find((m) => m.value === next)
+      const choice = choices.find((m) => m.value === next)
       if (choice?.costlyAsWorker) {
         const ok = window.confirm(
           `${choice.label} is intended for the Orchestrator + Reviewer only — running it as a worker is significantly more expensive. Use it anyway?`,
@@ -293,11 +381,14 @@ function ModelSelect({
       onChange={(e) => handleChange(e.target.value)}
       className="input-soft text-sm"
     >
-      {MODEL_CHOICES.map((m) => (
+      {choices.map((m) => (
         <option key={m.value} value={m.value}>
           {m.label} ({m.tier}{kind === 'worker' && m.costlyAsWorker ? ' · costly' : ''})
         </option>
       ))}
+      {!choices.some((m) => m.value === value) && (
+        <option value={value}>{value} (saved)</option>
+      )}
     </select>
   )
 }

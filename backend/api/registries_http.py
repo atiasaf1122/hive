@@ -1,16 +1,15 @@
 """HTTP routes for the public registry proxies.
 
-Endpoints (all cached server-side for 1 h):
+Endpoints (cached server-side for 1 h):
 
-    GET /api/registries/skills/search?q=&source=all|clawhub|cookbook|community
     GET /api/registries/mcp/list?q=&source=all|official|smithery&category=
+        → {items, fallback, sources_tried, sources_failed, categories, ...}
 
-Both return a uniform envelope:
-    {items, fallback, sources_tried, sources_failed, cached_at_age_seconds, ...}
-
-The frontend is responsible for showing the user warnings on items with
-`warn_unverified=true` (skills) or with explicit `permissions`/non-trusted
-source (plugins). The backend never auto-installs anything.
+The old GET /skills/search proxy was removed in the final close-out: the
+Skills page browses the LOCAL library and online skill discovery happens
+only inside `hive skills sync` / POST /skills/sync (which call
+backend.registries.skills.search_skills directly). `GET /diagnose` stays
+as the connectivity doctor for both fetcher families.
 """
 from __future__ import annotations
 
@@ -19,15 +18,6 @@ from fastapi import APIRouter, Query
 from backend.registries import mcp, skills
 
 router = APIRouter(prefix="/api/registries")
-
-
-@router.get("/skills/search")
-async def skills_search(
-    q: str | None = Query(None, max_length=120),
-    source: str = Query("all"),
-    force_refresh: bool = Query(False),
-) -> dict:
-    return await skills.search_skills(query=q, source=source, db_force_refresh=force_refresh)
 
 
 @router.get("/mcp/list")

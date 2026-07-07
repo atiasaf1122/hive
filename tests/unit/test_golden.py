@@ -132,3 +132,46 @@ def test_trajectory_endpoint_orders_and_types() -> None:
     with TestClient(app) as client:
         resp = client.get("/api/sessions/nope-x/trajectory")
     assert resp.status_code == 404
+
+
+def test_trajectory_taxonomy_covers_every_event_type() -> None:
+    """Close-out: no EventType may render as an unstyled 'other' blob.
+
+    RAW is the deliberate passthrough; everything else must have a
+    category, and post-D7 types must produce a human title (not the bare
+    type string) for their real payload shapes."""
+    from backend.api.trajectory_http import _CATEGORY, _title
+    from backend.workers.base import EventType
+
+    unmapped = [str(t) for t in EventType
+                if t is not EventType.RAW and str(t) not in _CATEGORY]
+    assert unmapped == [], f"event types falling through as 'other': {unmapped}"
+
+    cases = [
+        (EventType.TASK_SHAPE,
+         {"shape": "solo", "reasoning": "one file", "engine": "claude:haiku",
+          "override": False}, "routed as SOLO"),
+        (EventType.MODEL_FALLBACK,
+         {"from": "ollama:q", "to": "claude:haiku", "reason": "vram"},
+         "model fallback"),
+        (EventType.MODEL_DISCOVERED,
+         {"model": "gemma4:latest", "size_gb": 9.6}, "gemma4:latest"),
+        (EventType.GUARD_TRIPPED,
+         {"command": "rm -rf /", "reason": "catastrophic"}, "guard DENIED"),
+        (EventType.SALVAGE_REVIEW,
+         {"action": "merge", "reasoning": "clean docs"}, "salvage merge"),
+        (EventType.PLAN_ADJUSTED,
+         {"kind": "resequenced", "consumer": "Tester", "producer": "Builder",
+          "wave": 1}, "resequenced after Builder"),
+        (EventType.PLAN_ADJUSTED,
+         {"kind": "merged", "files": ["a.py"], "role": "Builder"},
+         "merged Builder"),
+        (EventType.CLASSIFIER_DISAGREEMENT, {}, "keywords disagree"),
+        (EventType.LESSON_STORED, {"title": "quote f-strings"},
+         "lesson stored: quote f-strings"),
+        (EventType.LESSON_NONE, {}, "no lesson"),
+    ]
+    for etype, raw, expect in cases:
+        title = _title({"type": str(etype), "payload": {"raw_payload": raw}})
+        assert expect in title, f"{etype}: {title!r} missing {expect!r}"
+        assert title != str(etype), f"{etype} fell through to the bare type"

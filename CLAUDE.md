@@ -73,8 +73,16 @@ Build phases A→G complete. HIVE has graduated to real use. Full rationale +
 per-phase progress log: `docs/ARCHITECTURE_REVIEW_2026-07.md`.
 
 - Version: **1.0.0** — one source of truth: `pyproject.toml`; `backend/main.py` reads installed metadata; desktop package.json/tauri.conf match.
-- Tests: **620 passing** (`pytest -q`), isolated via `HIVE_DIR` temp dir (conftest); hermetic — no real model calls or `~/.hive/hive.db` pollution.
+- Tests: **663 passing** (`pytest -q`), isolated via `HIVE_DIR` temp dir (conftest); hermetic — no real model calls or `~/.hive/hive.db` pollution.
 - Golden suite: 10 specs through the REAL pipeline (`hive golden run`) — no known-flaky specs; every spec passes deterministically or its failure means something.
+
+### Post-1.0 additions (July 2026, from real first use)
+- **Chat WS fix**: `resume_from: 0` = fresh client (live-only, backlog skipped); >0 = replay exactly the gap. The old replay-everything duplicated conversations on every mount.
+- **Local-model resolver** (`backend/models_local.py`): three layers — audition-measured (overrides all) > /api/show metadata (cached per model+digest) > name/size inference rules. `hive models list|audition <model>`; planner digest marks [measured|inferred|default]; new digests emit MODEL_DISCOVERED + a Settings audition nudge (never auto-runs).
+- **Local skills library**: ~110 skills at `~/.hive/skills/<family>/<slug>/SKILL.md` (~0.5MB). Online sources consulted ONLY during `hive skills sync` / the Skills page Sync button. Injection is size-capped (backend/skills/injector.py) — never trust a community SKILL.md to be small.
+- **Curated MCP catalog = 6**: playwright, github, context7, filesystem + postgres (read-only, needs POSTGRES_URL) + youtube-transcript. Plugins page: primary tab = this catalog with preflight status; registry browser = "Discover more" (equips the user's interactive CLI only, never agents).
+- **X-close = hermetic shutdown**: closing the window kills orphaned workers (via `stop-hive-wsl.sh --workers-only` — the kill pattern lives there ONCE) and exits the backend. Close-to-tray (automations on) keeps the backend. `wsl --shutdown` is exclusive to the Stop HIVE shortcut, now the fallback/repair tool. Rust `confirm_close` must use `window.destroy()` — `close()` re-enters the prevent+emit handler forever.
+- **Zero-event worker deaths are impossible to miss**: the worker synthesizes a terminal AGENT_ERROR (exit code, stderr tail, runtime) and the runner covers pre-yield crashes. Root cause of the family was E2BIG (>128KB prompt in one argv) — big prompts now go via stdin.
 
 ### What each phase contributed
 - **A — foundation**: session lifecycle (PIDs/idle/resume from LangGraph checkpoints), model registry, real session delete, silent-stall fix, dead-code deletion.
@@ -94,8 +102,9 @@ per-phase progress log: `docs/ARCHITECTURE_REVIEW_2026-07.md`.
 4. **Cost discipline** (invariant #7): Sonnet workhorse, Haiku mechanical/meta, Opus only for `llm_review`/salvage/META. `<backend>:<tier>` strings.
 
 ## Operating HIVE
-- **Run a session**: `hive start` (backend), desktop `cd desktop && npm run tauri:dev`; send a message in a project. The composer's Auto/Solo/Swarm/Chat selector overrides the classifier.
+- **Daily flow**: double-click the **HIVE** desktop icon (starts backend in WSL + app); close with the window's **X** (full hermetic shutdown). **Stop HIVE** icon = repair tool for a hung/unclean state. Dev-mode equivalents: `hive start` + `cd desktop && npm run tauri:dev`. The composer's Auto/Solo/Swarm/Chat selector overrides the classifier.
 - **Golden regression**: `hive golden run` (all 10 specs, real cost ~$1.5–2) or `--only <spec>`. Manual, never CI.
+- **Local models**: `hive models list` (capabilities + provenance), `hive models audition <model>` ($0 micro-tasks + one tiny Haiku grade; measured results override inference). `hive skills sync` refreshes the local skills library (manual, every few months).
 - **META (on-demand only)**: `hive meta` (or Settings→Lessons "Analyze & Advise") — one Opus pass over HIVE's own stats; advises, never auto-executes (~$0.34/run). The amber **"Recurring failures — run META?"** badge appears when ≥3 same-class failures cluster in 24h (`GET /api/meta/nudge`) — a nudge, not a schedule.
 - **Cost breakdown**: click the cost figure in a project's agents bar for a per-role breakdown (planner/gate/workers/summarizers/review, 🏠 $0 local rows, saved-via-local).
 
@@ -103,7 +112,7 @@ per-phase progress log: `docs/ARCHITECTURE_REVIEW_2026-07.md`.
 - **No OS sandbox** — containment is worktree isolation + the F1 PreToolUse guard (see invariant #3). bwrap/container is off the roadmap; revisit only if `GUARD_TRIPPED` clusters show the catastrophic list is insufficient.
 - **Lessons store is small (n≈2)** — retrieval bar (0.35) and 3-strike archive are unexercised at volume; real use grows the material.
 - **Telegram** (`backend/telegram/`) stays parked — untested against B–G changes.
-- **Distillation stays on Haiku** by default (`HIVE_LOCAL_INTERNAL=on` forces local) — the E4 quality check found the local 8B confabulated a lesson; summarization is local-first.
+- **Distillation stays on Haiku** by default (`HIVE_LOCAL_INTERNAL=on` forces local) — the E4 quality check found the local 8B confabulated a lesson; summarization is local-first. Measured audition data (qwen3-coder:30b scored 7/10 on Haiku-graded summarization) makes it a split-gate candidate (local drafts, Haiku gates) — surfaced, not implemented.
 
 ---
 

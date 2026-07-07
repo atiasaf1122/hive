@@ -29,6 +29,11 @@ const CATEGORY_TONE: Record<string, string> = {
   cost: 'bg-surface-2 text-ink-faint',
   tool: 'bg-surface-2 text-ink-faint',
   text: 'bg-surface-2 text-ink-muted',
+  // Post-D7 event families (close-out: nothing renders as a raw blob)
+  routing: 'bg-indigo-500/15 text-indigo-500',
+  model: 'bg-teal-500/15 text-teal-500',
+  guard: 'bg-red-500/15 text-red-600 dark:text-red-400',
+  plan: 'bg-purple-500/15 text-purple-500',
   other: 'bg-surface-2 text-ink-faint',
 }
 
