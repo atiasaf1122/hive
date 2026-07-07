@@ -86,6 +86,11 @@ def models_list() -> None:
 
     async def _run():
         await init_db()
+        # Resolve the Ollama base first — a fresh CLI process hasn't run
+        # backend detection, so the WSL host-IP fallback never fired and
+        # discovery would probe a dead localhost.
+        from backend.detection import _check_ollama
+        await _check_ollama()
         return await discover_local_models()
 
     models = _asyncio.run(_run())
@@ -113,6 +118,8 @@ def models_audition(model: str) -> None:
 
     async def _run():
         await init_db()
+        from backend.detection import _check_ollama
+        await _check_ollama()
         return await audition_model(model)
 
     measured = _asyncio.run(_run())

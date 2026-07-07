@@ -33,6 +33,10 @@ class ClaudeCLIWorker:
     # Track running processes: agent_id -> (process, pgid)
     _processes: ClassVar[dict[str, tuple[asyncio.subprocess.Process, int]]] = {}
 
+    # Prompts beyond this go via stdin — comfortably under the 128KB Linux
+    # single-argv cap while keeping the proven argv path for normal sizes.
+    _STDIN_PROMPT_BYTES: ClassVar[int] = 100_000
+
     def __init__(self, oauth_token: str | None = None) -> None:
         # Token can be injected or read from env at run time.
         self._oauth_token = oauth_token or os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
@@ -42,11 +46,17 @@ class ClaudeCLIWorker:
         from backend.detection import resolved_claude_path
 
         full_prompt = (config.system_prompt + chr(10) + chr(10) + prompt) if config.system_prompt else prompt
+        # Linux caps a SINGLE argv element at 128KB (MAX_ARG_STRLEN). A
+        # prompt past that made exec fail with E2BIG before the process
+        # even started — the zero-event death the close-out diagnostic
+        # caught live. Large prompts go via stdin instead (`claude -p`
+        # reads the prompt from stdin when no positional value is given).
+        prompt_via_stdin = len(full_prompt.encode()) > self._STDIN_PROMPT_BYTES
         cmd = [
             # Absolute path resolved by detection so we don't depend on
             # the launching shell's PATH including the install dir.
             resolved_claude_path(),
-            "-p", full_prompt,
+            "-p", *([] if prompt_via_stdin else [full_prompt]),
             "--output-format", "stream-json",
             "--verbose",
             "--include-partial-messages",
@@ -110,6 +120,7 @@ class ClaudeCLIWorker:
             *cmd,
             cwd=config.worktree_path,
             env=env,
+            stdin=asyncio.subprocess.PIPE if prompt_via_stdin else asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             # Create a new process group so we can kill the whole tree cleanly.
@@ -118,6 +129,21 @@ class ClaudeCLIWorker:
 
         pgid = os.getpgid(proc.pid)
         self._processes[config.agent_id] = (proc, pgid)
+
+        if prompt_via_stdin:
+            logger.info(
+                "Prompt (%d bytes) exceeds argv budget — feeding via stdin | agent=%s",
+                len(full_prompt.encode()), config.agent_id,
+            )
+            try:
+                proc.stdin.write(full_prompt.encode())  # type: ignore[union-attr]
+                await proc.stdin.drain()  # type: ignore[union-attr]
+                proc.stdin.close()  # type: ignore[union-attr]
+            except (BrokenPipeError, ConnectionResetError) as exc:
+                # Process died before reading — the zero-event diagnostic
+                # downstream reports the exit; don't mask it with a raise here.
+                logger.warning("Prompt stdin feed failed for %s: %s",
+                               config.agent_id, exc)
 
         # D0.1: drain stderr CONCURRENTLY into a bounded buffer. Reading it
         # only after exit risks a pipe-full deadlock, and a killed process

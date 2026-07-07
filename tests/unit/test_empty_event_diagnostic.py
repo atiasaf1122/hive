@@ -129,3 +129,74 @@ class AsyncMockCompat:
         async def _noop():
             return None
         return _noop()
+
+
+# ── The root cause the diagnostic caught live: E2BIG ─────────────────────────
+
+@pytest.mark.asyncio
+async def test_oversized_prompt_goes_via_stdin_not_argv():
+    """>100KB prompts made exec fail with 'Argument list too long' (the
+    zero-event death). They must be fed via stdin instead."""
+    captured: dict = {}
+
+    def fake_exec(*cmd, **kw):
+        captured["cmd"] = cmd
+        captured["stdin_mode"] = kw.get("stdin")
+        proc = _proc([{"type": "system", "subtype": "init"}], b"", 0)
+        stdin = MagicMock()
+        writes: list[bytes] = []
+        stdin.write = lambda data: writes.append(data)
+
+        async def _drain():
+            return None
+        stdin.drain = _drain
+        proc.stdin = stdin
+        captured["writes"] = writes
+        return proc
+
+    big_prompt = "x" * 150_000
+    with patch("asyncio.create_subprocess_exec", side_effect=fake_exec), \
+         patch("os.getpgid", return_value=1):
+        events = [e async for e in
+                  ClaudeCLIWorker(oauth_token="t").run(big_prompt, _config())]
+
+    # The giant prompt is NOT in argv; it went down stdin instead.
+    assert all(len(str(a)) < 1000 for a in captured["cmd"])
+    assert captured["writes"] and b"".join(captured["writes"]).decode() == big_prompt
+    assert any(e.type == EventType.AGENT_END for e in events)
+
+
+@pytest.mark.asyncio
+async def test_normal_prompt_stays_on_argv():
+    captured: dict = {}
+
+    def fake_exec(*cmd, **kw):
+        captured["cmd"] = cmd
+        return _proc([{"type": "system", "subtype": "init"}], b"", 0)
+
+    with patch("asyncio.create_subprocess_exec", side_effect=fake_exec), \
+         patch("os.getpgid", return_value=1):
+        [e async for e in ClaudeCLIWorker(oauth_token="t").run("small prompt", _config())]
+
+    assert "small prompt" in captured["cmd"]
+
+
+def test_skill_injection_is_size_capped():
+    """A 90KB community SKILL.md must not ride into the prompt whole."""
+    from backend.skills.injector import (
+        MAX_CONTEXT_CHARS,
+        MAX_SKILL_CHARS,
+        build_skill_context,
+    )
+    from backend.skills.registry import Skill
+
+    huge = Skill(id="huge", name="Huge Skill", description="d",
+                 tags=[], path="/x", instructions="A" * 90_000)
+    ctx = build_skill_context([huge, huge, huge])
+    assert len(ctx) <= MAX_CONTEXT_CHARS + 100
+    assert "truncated" in ctx
+
+    small = Skill(id="s", name="Small", description="d",
+                  tags=[], path="/x", instructions="short body")
+    assert "short body" in build_skill_context([small])
+    assert len(build_skill_context([small])) < MAX_SKILL_CHARS
