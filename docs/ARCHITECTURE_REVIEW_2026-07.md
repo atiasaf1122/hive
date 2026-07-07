@@ -595,6 +595,92 @@ navigational gain. Don't.
 
 # Progress log (newest first)
 
+## 2026-07-07 — FINAL CLOSE-OUT: the board is clean
+
+The last carried flag closed, every deferred item dispositioned, hygiene
+swept. Tests **663 passing**; golden re-run at close-out: **10/10,
+$2.32** (report golden-20260707-185529) — the full suite green post-fix,
+including lessons-injection, the spec the E2BIG bug killed in the
+morning's 9/10 run. This is the definitive current state before real
+project work (Vela lipsync) begins.
+
+### The empty-event-stream flag — CLOSED, and it found the family's root cause
+Two diagnostic layers shipped (worker: exit code + stderr tail + runtime,
+origin=infrastructure when nothing was emitted; runner: synthesized
+AGENT_ERROR for pre-yield crashes). On its FIRST live firing the
+diagnostic named the killer: **E2BIG — "[Errno 7] Argument list too
+long"**. The prompt rides in one argv element; Linux caps a single arg at
+128KB; the 110-skill library pushed top-3 skill injection past it
+(community SKILL.md files run to ~90KB). This killed the golden
+lessons-injection Writer AND a flask-todo run today. Fixed by
+construction: skill injection capped (4K/skill, 12K total), prompts
+>100KB go via stdin. flask-todo re-verified pass/pass after the fix.
+
+### Deferred-items sweep — verdicts
+1. **Live multi-agent salvage — ALREADY CLOSED (G2).** The salvage-proof
+   session g2aea7f8 WAS a concurrent 2-agent team: both agents started
+   the same second; the builder completed at +6s, the writer died at +39s
+   with commits, salvage merged its NOTES.md. No new scenario needed.
+2. **flask-todo canary — DETERMINISTIC.** 4 runs today: pass, fail
+   (E2BIG — root-caused above, now impossible), pass, pass. No golden
+   spec carries a known-flaky marker.
+3. **Multi-wave >2 & local multi-file — CLOSED.** Both specs passed
+   yesterday's full golden; the G4 behaviors (same-role merge, tester
+   resequencing) fired live as PLAN_ADJUSTED events. The "guidance" is
+   enforced in the plan parser (code), stronger than prompt text.
+4. **Lessons at scale — KEEP DEFERRED (correctly).** n=2, both organic
+   (real dogfood sessions e011b5ad/e0200537); lesson #1 applied once and
+   confirmed. The 0.35 threshold behaves sensibly at this scale — needs
+   organic accumulation, not fixable here.
+5. **TestRun/PackageInstall validators — KEEP DEFERRED (correctly).**
+   The file/git validators caught 5 recent real "worker claims X"
+   cases; no observed incident of an unverified TEST claim slipping
+   through (golden Testers actually run pytest). Revisit on first real
+   incident.
+6. **Distillation on local — CANDIDATE SURFACED (not implemented).**
+   First real audition data: **qwen3-coder:30b — 5/5 classification,
+   7/10 Haiku-graded summarization, pytest-green coding**; gemma4:latest
+   — 5/5, 6/10, pytest-green. qwen3-coder:30b is a measured split-gate
+   candidate (local drafts, Haiku gates) when lesson volume justifies it.
+
+### Hygiene sweep
+- **Version/docs**: 1.0.0 coherent everywhere; CLAUDE.md refreshed
+  (663 tests, post-1.0 additions, icon/X daily flow, resolver, library).
+- **Dead code**: GET /api/registries/skills/search removed (UI-orphaned
+  since the local library; discovery lives only in sync). Settings'
+  hardcoded ollama:llama3.1/qwen2.5 picker entries (models never pulled)
+  replaced with the live pool. diagnose kept as the ops doctor.
+- **Event taxonomy**: trajectory replay now maps EVERY EventType (added
+  TASK_SHAPE, GUARD_TRIPPED, SALVAGE_REVIEW, PLAN_ADJUSTED,
+  CLASSIFIER_DISAGREEMENT, MODEL_FALLBACK/DISCOVERED, LESSON_STORED/
+  NONE) with human titles + tones; a test forbids unstyled fallthrough.
+- **Nudges**: META badge verified (window-based clear by design); the
+  audition nudge now has UI (Settings→Ollama) with a working Audition
+  button — acting on it stores measured caps and clears the banner.
+- **CLI**: `hive models` commands run Ollama detection first (the WSL
+  host-IP fallback never fired in fresh CLI processes).
+
+### True numbers
+- Tests: **663** · Golden: 10 specs, no flaky markers
+- Lessons: **2** (organic) · Curated MCP catalog: **6 servers**
+- Skills library: **110 local** (~0.5MB, 7 families)
+- Local models: 3 discovered, **2 audition-measured**
+
+### Ready-for-real-work assessment (Vela lipsync)
+The one honest caveat: **HIVE's pipeline has never carried a
+long-horizon research+build project** — everything proven is
+session-scale (minutes, one plan, ≤3 agents, ≤2 waves). For Vela expect
+these edges: (1) research tasks route to Claude with built-in WebSearch —
+fine — but the ComfyUI/Python pipeline build will want the media MCPs we
+deliberately rejected as unvetted; plan on workers driving ComfyUI via
+Bash/HTTP directly. (2) Model-comparison work produces large artifacts;
+the reviewer/merge path is proven on code, not on measurement tables and
+model files — keep big binaries out of worktrees (gitignore them) or
+merges will drag. (3) Multi-session continuity across days rests on the
+lessons store (n=2) and compaction — both machinery-proven but
+volume-unexercised; expect to re-state project context in briefs early
+on. None of these block starting; they're where to watch.
+
 ## 2026-07-07 — Post-1.0 session: 2 live-bug clusters fixed + 4 upgrades (Parts 1–6)
 
 Six parts from real first-use findings. Tests 623 → **655 passing**. Golden

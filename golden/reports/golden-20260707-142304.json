@@ -1,0 +1,23 @@
+{
+  "timestamp": "20260707-142304",
+  "results": [
+    {
+      "name": "flask-todo-api",
+      "success": false,
+      "failures": [
+        "file_exists: app.py missing",
+        "file_contains: app.py missing",
+        "command_succeeds: `python3 -m pytest -q` exited 5: \nno tests ran in 0.00s\n"
+      ],
+      "wall_seconds": 62.1,
+      "cost_usd": 0.1224,
+      "input_tokens": 596,
+      "output_tokens": 5513,
+      "agents_spawned": 2,
+      "session_id": "g0616ffd"
+    }
+  ],
+  "total_cost_usd": 0.1224,
+  "passed": 0,
+  "total": 1
+}

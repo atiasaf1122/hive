@@ -1,0 +1,118 @@
+{
+  "timestamp": "20260707-185529",
+  "results": [
+    {
+      "name": "ambiguous-task",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 20.3,
+      "cost_usd": 0.0845,
+      "input_tokens": 577,
+      "output_tokens": 728,
+      "agents_spawned": 0,
+      "session_id": "gbaa842f"
+    },
+    {
+      "name": "docs-only",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 30.4,
+      "cost_usd": 0.0,
+      "input_tokens": 4090,
+      "output_tokens": 473,
+      "agents_spawned": 1,
+      "session_id": "gbefccc4"
+    },
+    {
+      "name": "flask-todo-api",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 109.1,
+      "cost_usd": 0.4842,
+      "input_tokens": 2494,
+      "output_tokens": 7761,
+      "agents_spawned": 2,
+      "session_id": "g2387907"
+    },
+    {
+      "name": "lessons-injection",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 96.6,
+      "cost_usd": 0.3314,
+      "input_tokens": 1894,
+      "output_tokens": 8597,
+      "agents_spawned": 1,
+      "session_id": "gb7acb73"
+    },
+    {
+      "name": "local-multifile-refactor",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 11.6,
+      "cost_usd": 0.0,
+      "input_tokens": 2590,
+      "output_tokens": 1273,
+      "agents_spawned": 1,
+      "session_id": "g9864129"
+    },
+    {
+      "name": "multi-file-python",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 101.4,
+      "cost_usd": 0.477,
+      "input_tokens": 2629,
+      "output_tokens": 8073,
+      "agents_spawned": 2,
+      "session_id": "gc5987ed"
+    },
+    {
+      "name": "palette-playwright",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 58.9,
+      "cost_usd": 0.4015,
+      "input_tokens": 2071,
+      "output_tokens": 3897,
+      "agents_spawned": 1,
+      "session_id": "g8df296d"
+    },
+    {
+      "name": "snake-game",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 40.7,
+      "cost_usd": 0.1868,
+      "input_tokens": 1245,
+      "output_tokens": 4166,
+      "agents_spawned": 1,
+      "session_id": "gf78e659"
+    },
+    {
+      "name": "three-wave-chain",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 116.4,
+      "cost_usd": 0.3534,
+      "input_tokens": 1750,
+      "output_tokens": 10519,
+      "agents_spawned": 1,
+      "session_id": "g86cae20"
+    },
+    {
+      "name": "tiny-fix",
+      "success": true,
+      "failures": [],
+      "wall_seconds": 3.7,
+      "cost_usd": 0.0,
+      "input_tokens": 2226,
+      "output_tokens": 302,
+      "agents_spawned": 1,
+      "session_id": "g0f224bd"
+    }
+  ],
+  "total_cost_usd": 2.3188,
+  "passed": 10,
+  "total": 10
+}
