@@ -1,13 +1,19 @@
-# Stop HIVE (Windows).
-# Closes the desktop app (and its tauri-dev tooling), kills the WSL backend and
-# any orphaned HIVE claude workers, then — if nothing else is running in WSL —
-# offers to run `wsl --shutdown` to free the VM's memory.
+# Stop HIVE (Windows) — the FALLBACK/REPAIR tool.
+# Daily flow is: launch icon to start, the window's X to stop (the app now
+# performs the full hermetic shutdown itself). Use THIS script when the app
+# is hung, was closed uncleanly, or something is left over: it closes the
+# desktop app (and its tauri-dev tooling), kills the WSL backend and any
+# orphaned HIVE claude workers, then — if nothing else is running in WSL —
+# offers to run `wsl --shutdown` to free the VM's memory (exclusive to this
+# script; the X-close never does that).
 #
 # Desktop shortcut: powershell -NoProfile -ExecutionPolicy Bypass -File \\wsl.localhost\Ubuntu\home\atiasaf1122\hive\scripts\stop-hive.ps1
 
 $ErrorActionPreference = 'Continue'
 $Distro = 'Ubuntu'
 $killedSomething = $false
+
+Write-Host 'Stop HIVE — fallback/repair tool (daily flow: close the app with X).' -ForegroundColor Cyan
 
 # ── 1. Desktop app + dev tooling ─────────────────────────────────────────────
 Write-Host '[Windows] closing HIVE desktop app...'

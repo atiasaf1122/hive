@@ -1,18 +1,21 @@
 /**
- * Close-confirmation flow (Phase 9D-C).
+ * Close-confirmation flow (Phase 9D-C + post-1.0 Part 6 hermetic close).
  *
  *   The Rust side calls `window.prevent_close()` and emits
  *   "hive://close-requested" whenever the user tries to close the window.
  *   This component listens, asks the backend for `/api/lifecycle/active-counts`,
  *   and either:
  *
- *     • silently confirms the close (nothing active and `backgroundAutomations`
- *       is off, OR nothing active at all),
- *     • shows the confirmation modal if interactive agents are still running,
+ *     • silently closes (nothing active) — after asking the backend to
+ *       perform the hermetic shutdown (kill orphaned workers, then exit),
+ *     • shows the confirmation modal if interactive agents are still
+ *       running — "Stop and close" tears everything down,
  *     • or silently closes-to-tray if only automations are running and
- *       `backgroundAutomations` is on (the tray comes from 9D-B).
+ *       `backgroundAutomations` is on — the backend KEEPS RUNNING then.
  *
- *   The Rust `confirm_close` IPC command receives the final decision.
+ *   The X is the daily way out: one icon to start, X to stop. The "Stop
+ *   HIVE" desktop shortcut remains as the fallback/repair tool for a hung
+ *   or uncleanly-closed app. `wsl --shutdown` is never run from here.
  */
 import { IconAlertTriangle } from '@tabler/icons-react'
 import { invoke } from '@tauri-apps/api/core'
@@ -27,6 +30,17 @@ interface ActiveCounts {
   telegram_bot_running: boolean
   has_interactive_work: boolean
   should_keep_background: boolean
+}
+
+/** Part 6: ask the backend to kill orphaned workers and exit. Best-effort —
+ *  a dead/hung backend must never block the window from closing (the Stop
+ *  HIVE shortcut is the repair tool for that case). */
+async function shutdownBackend(): Promise<void> {
+  try {
+    await api.post('/api/lifecycle/shutdown', {})
+  } catch {
+    /* backend already gone or not responding — close anyway */
+  }
 }
 
 export function CloseConfirmation() {
@@ -47,7 +61,7 @@ export function CloseConfirmation() {
       try {
         counts = await api.get<ActiveCounts>('/api/lifecycle/active-counts')
       } catch {
-        // Couldn't reach backend — just close.
+        // Couldn't reach backend — nothing to shut down, just close.
         await invoke('confirm_close', { confirm: true })
         return
       }
@@ -57,9 +71,12 @@ export function CloseConfirmation() {
         return
       }
       if (counts.should_keep_background && backgroundAutomations) {
+        // Close to tray: automations keep the backend alive on purpose.
         await invoke('confirm_close', { confirm: true })
         return
       }
+      // Nothing running — hermetic shutdown, clean and fast, no nagging.
+      await shutdownBackend()
       await invoke('confirm_close', { confirm: true })
     }
 
@@ -84,6 +101,7 @@ export function CloseConfirmation() {
   async function confirm(stop: boolean) {
     setPending(null)
     if (stop) {
+      await shutdownBackend()
       await invoke('confirm_close', { confirm: true })
     } else {
       await invoke('confirm_close', { confirm: false })

@@ -179,10 +179,16 @@ pub fn run() {
 /// Called from the React side once the close dialog resolves.
 ///   confirm = true  → actually close the window
 ///   confirm = false → no-op (user cancelled)
+///
+/// destroy(), not close(): close() re-fires CloseRequested, which the
+/// on_window_event handler prevents and re-emits to React — an infinite
+/// confirm loop where the window never dies (the X silently never worked;
+/// found during the Part 6 hermetic-close live test). destroy() skips the
+/// CloseRequested round-trip entirely.
 #[tauri::command]
 async fn confirm_close(window: tauri::Window, confirm: bool) -> Result<(), String> {
     if confirm {
-        window.close().map_err(|e| e.to_string())?;
+        window.destroy().map_err(|e| e.to_string())?;
     }
     Ok(())
 }
