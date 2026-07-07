@@ -10,6 +10,7 @@ import asyncio
 import logging
 import os
 import signal
+import time
 from collections import deque
 from collections.abc import AsyncIterator
 from typing import ClassVar
@@ -138,8 +139,11 @@ class ClaudeCLIWorker:
         raw_tail: deque[str] = deque(maxlen=3)
 
         stalled = False
+        started = time.monotonic()
+        yielded = 0
         try:
             async for event in parse_stream(proc.stdout, config, raw_tail=raw_tail):  # type: ignore[arg-type]
+                yielded += 1
                 # Stamp the subprocess PID onto the start event so the
                 # orchestrator can persist it (agents.pid) — recovery uses
                 # it to tell a live agent from a crashed one after restart.
@@ -175,6 +179,7 @@ class ClaudeCLIWorker:
                 stderr_task.cancel()
             exit_code = proc.returncode
 
+            runtime_s = time.monotonic() - started
             if exit_code != 0:
                 # D0.1: the C5 dogfooding failure mode was 'claude exited 1
                 # (no stderr captured)' repeated with zero diagnosis. Include
@@ -188,14 +193,35 @@ class ClaudeCLIWorker:
                     detail = " (empty stderr; last stdout lines: " + " | ".join(raw_tail) + ")"
                 else:
                     detail = " (empty stderr, no stdout captured)"
-                error_msg = f"claude exited {exit_code}{detail}"
+                error_msg = (f"claude exited {exit_code} after {runtime_s:.1f}s"
+                             f"{detail}")
                 logger.error("claude CLI exited with error | agent=%s: %s", config.agent_id, error_msg)
                 yield HiveEvent(
                     type=EventType.AGENT_ERROR,
                     agent_id=config.agent_id,
                     session_id=config.session_id,
                     error=error_msg,
-                    origin="unknown",  # D0.2: exit codes alone can't assign fault
+                    # Post-1.0 close-out: a process that died having emitted
+                    # ZERO events never let the agent act — that's the
+                    # harness/CLI, not the agent. With events, exit codes
+                    # alone still can't assign fault (D0.2).
+                    origin="infrastructure" if yielded == 0 else "unknown",
+                )
+            elif yielded == 0:
+                # Exit 0 with NO parsed events used to masquerade as a clean
+                # AGENT_END — an empty silent death. Surface it instead.
+                stderr_text = bytes(stderr_buf).decode(errors="replace").strip()
+                detail = (f"; stderr tail: {stderr_text[-2048:]}" if stderr_text
+                          else "; empty stderr, no parseable stdout")
+                error_msg = (f"claude exited 0 without emitting any events "
+                             f"after {runtime_s:.1f}s{detail}")
+                logger.error("%s | agent=%s", error_msg, config.agent_id)
+                yield HiveEvent(
+                    type=EventType.AGENT_ERROR,
+                    agent_id=config.agent_id,
+                    session_id=config.session_id,
+                    error=error_msg,
+                    origin="infrastructure",
                 )
             else:
                 yield HiveEvent(

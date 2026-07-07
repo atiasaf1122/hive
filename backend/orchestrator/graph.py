@@ -1545,6 +1545,7 @@ async def _execute_worker(
     text_parts: list[str] = []
     final_text: str | None = None    # populated when TEXT_DONE arrives
     collected_events: list = []      # B3: fed to the Haiku summarizer post-run
+    run_started = time.monotonic()
     result = AgentResult(
         agent_id=agent.agent_id, status="completed", text_output="",
         input_tokens=0, output_tokens=0, cost_usd=0.0, error=None,
@@ -1627,6 +1628,36 @@ async def _execute_worker(
         if vram_reservation_key is not None:
             from backend.resources import vram_manager
             vram_manager.release(vram_reservation_key)
+
+    # Post-1.0 close-out: a worker that produced ZERO events used to leave
+    # no trace in the event log (the golden lessons-injection death — its
+    # error lived only in result["error"] and the process log). Synthesize
+    # exactly one terminal diagnostic so an empty silent death is
+    # impossible; the worker itself covers processes that exit event-less
+    # (exit code + stderr tail), this covers exceptions raised BEFORE the
+    # first yield (spawn/HIVE-code failures → infrastructure).
+    if not collected_events:
+        runtime_s = time.monotonic() - run_started
+        diag = HiveEvent(
+            type=EventType.AGENT_ERROR, agent_id=agent.agent_id,
+            session_id=session_id, origin="infrastructure",
+            error=(f"worker produced no events in {runtime_s:.1f}s — "
+                   + (result["error"] or "stream ended without output")),
+        )
+        # NOT appended to collected_events: there is nothing for the
+        # summarizer to summarize; the diagnostic is persisted directly.
+        try:
+            await write_event(diag)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Diagnostic event write failed for %s: %s",
+                           agent.agent_id, exc)
+        await _emit_to_ws(session_id, {
+            "type": diag.type, "agent_id": agent.agent_id,
+            "session_id": session_id, "error": diag.error,
+        })
+        result["status"] = "failed"
+        result["error"] = diag.error
+        result["failure_origin"] = "infrastructure"
 
     # F1.3: any guard denials during the run become events.
     try:
